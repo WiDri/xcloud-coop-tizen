@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         xCloud Co-op (Tizen)
 // @description  Alleen lokale co-op (meerdere controllers) voor xbox.com/play. Gebaseerd op de co-op-patch van Better xCloud (MIT, © redphx).
-// @version      1.3.0
+// @version      1.4.0
 // @match        https://www.xbox.com/*/play*
 // @run-at       document-start
 // @grant        none
@@ -255,6 +255,46 @@
       }
     }
   }, 50);
+
+  // ---------------------------------------------------------------------------
+  // Diagnose: buiten een stream laat een paneel zien welke knopnummers de tv doorgeeft
+  // ---------------------------------------------------------------------------
+  var streaming = false;
+  ['pause', 'ended', 'emptied'].forEach(function (ev) {
+    document.addEventListener(ev, function (e) { if (e.target && e.target.tagName === 'VIDEO') streaming = false; }, true);
+  });
+  document.addEventListener('playing', function (e) { if (e.target && e.target.tagName === 'VIDEO') streaming = true; }, true);
+
+  var dbgHide = null;
+  setInterval(function () {
+    if (streaming || !document.body) return;
+    var pads = navigator.getGamepads ? navigator.getGamepads() : [];
+    var lines = [];
+    for (var i = 0; i < pads.length; i++) {
+      var p = pads[i];
+      if (!p || !p.connected) continue;
+      var pressed = [];
+      for (var b = 0; b < p.buttons.length; b++) if (p.buttons[b] && p.buttons[b].pressed) pressed.push(b);
+      if (pressed.length) {
+        lines.push('Controller ' + (p.index + 1) + ' (' + (p.mapping || 'geen mapping') + ', ' +
+          p.buttons.length + ' knoppen): ' + pressed.join(', ') + '\n' + p.id);
+      }
+    }
+    if (!lines.length) return;
+    var el = document.getElementById('xc-coop-debug');
+    if (!el) {
+      el = document.createElement('pre');
+      el.id = 'xc-coop-debug';
+      el.style.cssText = 'position:fixed;left:24px;bottom:24px;z-index:2147483647;margin:0;max-width:70vw;' +
+        'background:rgba(0,0,0,.85);color:#7CFC7C;font:18px/1.4 monospace;padding:10px 14px;' +
+        'border-radius:8px;pointer-events:none;white-space:pre-wrap';
+      document.body.appendChild(el);
+    }
+    el.textContent = lines.join('\n\n');
+    el.style.display = 'block';
+    clearTimeout(dbgHide);
+    dbgHide = setTimeout(function () { el.style.display = 'none'; }, 3000);
+  }, 100);
 
   // ---------------------------------------------------------------------------
   // 4. Co-op aanzetten zodra de stream echt speelt
