@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         xCloud Co-op (Tizen)
 // @description  Alleen lokale co-op (meerdere controllers) voor xbox.com/play. Gebaseerd op de co-op-patch van Better xCloud (MIT, © redphx).
-// @version      1.4.0
+// @version      1.5.0
 // @match        https://www.xbox.com/*/play*
 // @run-at       document-start
 // @grant        none
@@ -266,6 +266,39 @@
   document.addEventListener('playing', function (e) { if (e.target && e.target.tagName === 'VIDEO') streaming = true; }, true);
 
   var dbgHide = null;
+  var dbgEvents = [];
+  function showDebug(text) {
+    if (!document.body) return;
+    var el = document.getElementById('xc-coop-debug');
+    if (!el) {
+      el = document.createElement('pre');
+      el.id = 'xc-coop-debug';
+      el.style.cssText = 'position:fixed;left:24px;bottom:24px;z-index:2147483647;margin:0;max-width:70vw;' +
+        'background:rgba(0,0,0,.85);color:#7CFC7C;font:18px/1.4 monospace;padding:10px 14px;' +
+        'border-radius:8px;pointer-events:none;white-space:pre-wrap';
+      document.body.appendChild(el);
+    }
+    el.textContent = text;
+    el.style.display = 'block';
+    clearTimeout(dbgHide);
+    dbgHide = setTimeout(function () { el.style.display = 'none'; dbgEvents = []; }, 4000);
+  }
+
+  // Andere invoer die het touchpad zou kunnen sturen (muis, aanraking, toetsen)
+  ['keydown', 'mousedown', 'mousemove', 'pointerdown', 'touchstart', 'click', 'wheel', 'contextmenu'].forEach(function (type) {
+    window.addEventListener(type, function (e) {
+      if (streaming) return;
+      var info = type;
+      if (e.keyCode !== undefined && type === 'keydown') info += ' keyCode=' + e.keyCode + ' key=' + e.key;
+      if (e.button !== undefined && type !== 'keydown' && type !== 'mousemove') info += ' button=' + e.button;
+      if (e.pointerType) info += ' pointerType=' + e.pointerType;
+      if (type === 'mousemove' && dbgEvents[dbgEvents.length - 1] === info) return;
+      dbgEvents.push(info);
+      if (dbgEvents.length > 6) dbgEvents.shift();
+      showDebug('Overige invoer:\n' + dbgEvents.join('\n'));
+    }, true);
+  });
+
   setInterval(function () {
     if (streaming || !document.body) return;
     var pads = navigator.getGamepads ? navigator.getGamepads() : [];
@@ -281,19 +314,7 @@
       }
     }
     if (!lines.length) return;
-    var el = document.getElementById('xc-coop-debug');
-    if (!el) {
-      el = document.createElement('pre');
-      el.id = 'xc-coop-debug';
-      el.style.cssText = 'position:fixed;left:24px;bottom:24px;z-index:2147483647;margin:0;max-width:70vw;' +
-        'background:rgba(0,0,0,.85);color:#7CFC7C;font:18px/1.4 monospace;padding:10px 14px;' +
-        'border-radius:8px;pointer-events:none;white-space:pre-wrap';
-      document.body.appendChild(el);
-    }
-    el.textContent = lines.join('\n\n');
-    el.style.display = 'block';
-    clearTimeout(dbgHide);
-    dbgHide = setTimeout(function () { el.style.display = 'none'; }, 3000);
+    showDebug(lines.join('\n\n') + (dbgEvents.length ? '\n\nOverige invoer:\n' + dbgEvents.join('\n') : ''));
   }, 100);
 
   // ---------------------------------------------------------------------------
