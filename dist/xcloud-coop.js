@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         xCloud Co-op (Tizen)
 // @description  Alleen lokale co-op (meerdere controllers) voor xbox.com/play. Gebaseerd op de co-op-patch van Better xCloud (MIT, © redphx).
-// @version      1.5.0
+// @version      1.6.0
 // @match        https://www.xbox.com/*/play*
 // @run-at       document-start
 // @grant        none
@@ -221,37 +221,61 @@
   };
 
   // ---------------------------------------------------------------------------
-  // Vervanging voor de Xbox-knop:
-  //  - houd View + Menu 1 seconde ingedrukt (PS-stijl: Share + Options)
-  //  - of druk op het touchpad (PS-stijl controllers, knop 17)
+  // Vervanging voor de Xbox-knop: houd View + Menu 1 seconde ingedrukt
+  // (PS-stijl: Share + Options). De tv vangt de echte Xbox/PS-knop af, dus
+  // we laten xCloud zelf denken dat knop 16 (Xbox-knop) wordt ingedrukt door
+  // de controllerstatus die xCloud uitleest heel even aan te passen.
   // ---------------------------------------------------------------------------
+  var nativeGetGamepads = navigator.getGamepads ? navigator.getGamepads.bind(navigator) : function () { return []; };
+  var NEXUS_MS = 200;
+  var forceNexusUntil = {};
+
+  function btn(pressed) { return { pressed: pressed, touched: pressed, value: pressed ? 1 : 0 }; }
+
+  function withNexus(p) {
+    var buttons = [];
+    for (var b = 0; b < p.buttons.length; b++) buttons.push(p.buttons[b]);
+    while (buttons.length < 17) buttons.push(btn(false));
+    buttons[16] = btn(true);
+    buttons[8] = btn(false);   // View/Share loslaten zodat de game niets extra's doet
+    buttons[9] = btn(false);   // Menu/Options idem
+    return {
+      id: p.id, index: p.index, connected: p.connected, mapping: p.mapping,
+      timestamp: performance.now(), axes: p.axes, buttons: buttons,
+      vibrationActuator: p.vibrationActuator, hapticActuators: p.hapticActuators
+    };
+  }
+
+  navigator.getGamepads = function () {
+    var pads = nativeGetGamepads();
+    var now = Date.now();
+    var active = false;
+    for (var k in forceNexusUntil) if (forceNexusUntil[k] > now) { active = true; break; }
+    if (!active) return pads;
+    var out = [];
+    for (var i = 0; i < pads.length; i++) {
+      var p = pads[i];
+      out.push(p && p.connected && forceNexusUntil[p.index] > now ? withNexus(p) : p);
+    }
+    return out;
+  };
+
   var HOLD_MS = 1000;
   var holdStart = {};
   var holdFired = {};
   setInterval(function () {
-    if (typeof window.__xcSendNexus !== 'function') return;
-    var pads = navigator.getGamepads ? navigator.getGamepads() : [];
+    var pads = nativeGetGamepads();
     var now = Date.now();
     for (var i = 0; i < pads.length; i++) {
       var p = pads[i];
       if (!p || !p.connected || !p.buttons || p.buttons.length < 10) continue;
-      var touch = p.buttons[17] && p.buttons[17].pressed;
-      if (touch) {
-        if (!holdFired['t' + p.index]) {
-          holdFired['t' + p.index] = true;
-          try { window.__xcSendNexus(p.index); toast('Xbox-menu (controller ' + (p.index + 1) + ')'); }
-          catch (e) { console.error(TAG, 'Xbox-knop nabootsen mislukt', e); }
-        }
-      } else {
-        holdFired['t' + p.index] = false;
-      }
       var held = p.buttons[8].pressed && p.buttons[9].pressed;
       if (!held) { holdStart[p.index] = 0; holdFired[p.index] = false; continue; }
       if (!holdStart[p.index]) holdStart[p.index] = now;
       if (!holdFired[p.index] && now - holdStart[p.index] >= HOLD_MS) {
         holdFired[p.index] = true;
-        try { window.__xcSendNexus(p.index); toast('Xbox-menu (controller ' + (p.index + 1) + ')'); }
-        catch (e) { console.error(TAG, 'Xbox-knop nabootsen mislukt', e); }
+        forceNexusUntil[p.index] = now + NEXUS_MS;
+        toast('Xbox-knop (controller ' + (p.index + 1) + ')');
       }
     }
   }, 50);
@@ -301,7 +325,7 @@
 
   setInterval(function () {
     if (streaming || !document.body) return;
-    var pads = navigator.getGamepads ? navigator.getGamepads() : [];
+    var pads = nativeGetGamepads();
     var lines = [];
     for (var i = 0; i < pads.length; i++) {
       var p = pads[i];
