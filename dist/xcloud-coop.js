@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         xCloud Co-op (Tizen)
 // @description  Alleen lokale co-op (meerdere controllers) voor xbox.com/play. Gebaseerd op de co-op-patch van Better xCloud (MIT, © redphx).
-// @version      1.6.0
+// @version      1.7.0
 // @match        https://www.xbox.com/*/play*
 // @run-at       document-start
 // @grant        none
@@ -77,11 +77,13 @@
         self.__xcEnabled = true;
         self.onGamepadChanged = patchedChanged;
         self.onGamepadInput = patchedInput;
-        // Controllers opnieuw aanmelden zodat ze met hun eigen nummer worden geregistreerd
+        // Controllers 2+ opnieuw aanmelden zodat ze met hun eigen nummer worden geregistreerd.
+        // Controller 1 (index 0) slaan we over: die stond al goed, en hem afmelden laat
+        // xCloud het scherm "sluit een controller aan" tonen.
         var pads = navigator.getGamepads ? navigator.getGamepads() : [];
         for (var i = 0; i < pads.length; i++) {
           var p = pads[i];
-          if (!p || !p.connected) continue;
+          if (!p || !p.connected || p.index === 0) continue;
           try { p._xcSilent = true; } catch (e) {}
           window.dispatchEvent(new GamepadEvent('gamepaddisconnected', { gamepad: p }));
           window.dispatchEvent(new GamepadEvent('gamepadconnected', { gamepad: p }));
