@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         xCloud Co-op (Tizen)
 // @description  Alleen lokale co-op (meerdere controllers) voor xbox.com/play. Gebaseerd op de co-op-patch van Better xCloud (MIT, © redphx).
-// @version      1.7.0
+// @version      1.9.0
 // @match        https://www.xbox.com/*/play*
 // @run-at       document-start
 // @grant        none
@@ -13,6 +13,7 @@
   if (window.__xcCoop) return;
   window.__xcCoop = true;
 
+  var VERSION = '1.9.0';
   var TAG = '[xCloud co-op]';
   function log() { console.log.apply(console, [TAG].concat([].slice.call(arguments))); }
 
@@ -346,15 +347,42 @@
   // ---------------------------------------------------------------------------
   // 4. Co-op aanzetten zodra de stream echt speelt
   // ---------------------------------------------------------------------------
+  // Let op: tijdens het laden speelt xCloud soms al een video (trailer/wachtscherm)
+  // voordat de stream en de inputmanager bestaan. Daarom even blijven wachten.
+  var enableTimer = null;
   document.addEventListener('playing', function (e) {
     if (!e.target || e.target.tagName !== 'VIDEO') return;
-    if (typeof window.__xcCoopEnable !== 'function') {
-      toast('Co-op-patch niet actief (xCloud is mogelijk gewijzigd)');
-      return;
-    }
-    if (!window.__xcCoopEnable()) return;
-    toast('Lokale co-op aan · ' + connectedPads().length + ' controller(s)');
+    if (enableTimer) return;
+    var tries = 0;
+    enableTimer = setInterval(function () {
+      tries++;
+      if (typeof window.__xcCoopEnable === 'function') {
+        clearInterval(enableTimer); enableTimer = null;
+        if (window.__xcCoopEnable()) toast('Lokale co-op aan · ' + connectedPads().length + ' controller(s)');
+        return;
+      }
+      if (tries >= 120) { // ±60 seconden
+        clearInterval(enableTimer); enableTimer = null;
+        toast('Co-op-patch niet actief (xCloud is mogelijk gewijzigd)');
+      }
+    }, 500);
   }, true);
 
-  log('geladen');
+  // ---------------------------------------------------------------------------
+  // Versielabel linksboven
+  // ---------------------------------------------------------------------------
+  function showVersionBadge() {
+    if (!document.documentElement || !document.body) { document.addEventListener('DOMContentLoaded', showVersionBadge); return; }
+    if (document.getElementById('xc-coop-version')) return;
+    var el = document.createElement('div');
+    el.id = 'xc-coop-version';
+    el.textContent = 'co-op v' + VERSION;
+    el.style.cssText = 'position:fixed;left:8px;top:8px;z-index:2147483647;pointer-events:none;' +
+      'background:rgba(0,0,0,.55);color:#fff;font:600 13px/1 system-ui,sans-serif;' +
+      'padding:4px 7px;border-radius:5px;opacity:.75';
+    document.documentElement.appendChild(el);
+  }
+  showVersionBadge();
+
+  log('geladen v' + VERSION);
 })();
