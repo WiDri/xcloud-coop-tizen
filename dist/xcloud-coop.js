@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         xCloud Co-op (Tizen)
 // @description  Alleen lokale co-op (meerdere controllers) voor xbox.com/play. Gebaseerd op de co-op-patch van Better xCloud (MIT, © redphx).
-// @version      2.13.0
+// @version      3.0.0
 // @match        https://www.xbox.com/*/play*
 // @run-at       document-start
 // @grant        none
@@ -13,15 +13,17 @@
   if (window.__xcCoop) return;
   window.__xcCoop = true;
 
-  var VERSION = '2.13.0';
+  var VERSION = '3.0.0';
 
   // ---------------------------------------------------------------------------
   // 0. Browser vermommen als Windows/Edge, zodat xCloud niet de route van de
   //    officiële Samsung-app kiest (die controllers via Samsung zelf herkent).
   //    Werkt alleen als dit script vroeg genoeg draait (via de cache van de loader).
-  //    Zet UA_SPOOF op false om dit uit te schakelen.
+  //    Aan/uit te zetten via het co-op-menu (L1 + R1 + Options).
   // ---------------------------------------------------------------------------
+  var UA_KEY = 'xcCoop.uaSpoof';
   var UA_SPOOF = true;
+  try { UA_SPOOF = window.localStorage.getItem(UA_KEY) !== 'off'; } catch (e) {}
   var uaSpoofed = false;
   if (UA_SPOOF && /Tizen|SMART-TV/i.test(navigator.userAgent)) {
     try {
@@ -303,13 +305,15 @@
   }
   var testerOpen = false;
   var cursorOn = false;
+  var menuOpen = false;
+  function inputBlocked() { return testerOpen || cursorOn || menuOpen; }
   function patchedGetGamepads() {
     var pads = nativeGetGamepads();
     var now = Date.now();
     var out = [];
     for (var i = 0; i < pads.length; i++) {
       var p = pads[i];
-      if (p && p.connected && (testerOpen || cursorOn)) out.push(idlePad(p)); // xCloud ziet niets tijdens test/cursor
+      if (p && p.connected && inputBlocked()) out.push(idlePad(p)); // xCloud ziet niets tijdens menu/test/cursor
       else out.push(p && p.connected && forceNexusUntil[p.index] > now ? withNexus(p) : p);
     }
     return out;
@@ -326,7 +330,7 @@
     navigator.getGamepads = patchedGetGamepads;
     clearTimeout(restoreTimer);
     restoreTimer = setTimeout(function () {
-      if (!testerOpen && !cursorOn) setGamepadOverride(false);
+      if (!inputBlocked()) setGamepadOverride(false);
     }, NEXUS_MS + 100);
   }
 
@@ -349,67 +353,6 @@
       }
     }
   }, 50);
-
-  // ---------------------------------------------------------------------------
-  // Diagnose: buiten een stream laat een paneel zien welke knopnummers de tv doorgeeft
-  // ---------------------------------------------------------------------------
-  var streaming = false;
-  ['pause', 'ended', 'emptied'].forEach(function (ev) {
-    document.addEventListener(ev, function (e) { if (e.target && e.target.tagName === 'VIDEO') streaming = false; }, true);
-  });
-  document.addEventListener('playing', function (e) { if (e.target && e.target.tagName === 'VIDEO') streaming = true; }, true);
-
-  var dbgHide = null;
-  var dbgEvents = [];
-  function showDebug(text) {
-    if (!document.body) return;
-    var el = document.getElementById('xc-coop-debug');
-    if (!el) {
-      el = document.createElement('pre');
-      el.id = 'xc-coop-debug';
-      el.style.cssText = 'position:fixed;left:24px;bottom:24px;z-index:2147483647;margin:0;max-width:70vw;' +
-        'background:rgba(0,0,0,.85);color:#7CFC7C;font:18px/1.4 monospace;padding:10px 14px;' +
-        'border-radius:8px;pointer-events:none;white-space:pre-wrap';
-      document.body.appendChild(el);
-    }
-    el.textContent = text;
-    el.style.display = 'block';
-    clearTimeout(dbgHide);
-    dbgHide = setTimeout(function () { el.style.display = 'none'; dbgEvents = []; }, 4000);
-  }
-
-  // Andere invoer die het touchpad zou kunnen sturen (muis, aanraking, toetsen)
-  ['keydown', 'mousedown', 'mousemove', 'pointerdown', 'touchstart', 'click', 'wheel', 'contextmenu'].forEach(function (type) {
-    window.addEventListener(type, function (e) {
-      if (streaming) return;
-      var info = type;
-      if (e.keyCode !== undefined && type === 'keydown') info += ' keyCode=' + e.keyCode + ' key=' + e.key;
-      if (e.button !== undefined && type !== 'keydown' && type !== 'mousemove') info += ' button=' + e.button;
-      if (e.pointerType) info += ' pointerType=' + e.pointerType;
-      if (type === 'mousemove' && dbgEvents[dbgEvents.length - 1] === info) return;
-      dbgEvents.push(info);
-      if (dbgEvents.length > 6) dbgEvents.shift();
-      showDebug('Overige invoer:\n' + dbgEvents.join('\n'));
-    }, true);
-  });
-
-  setInterval(function () {
-    if (streaming || !document.body) return;
-    var pads = nativeGetGamepads();
-    var lines = [];
-    for (var i = 0; i < pads.length; i++) {
-      var p = pads[i];
-      if (!p || !p.connected) continue;
-      var pressed = [];
-      for (var b = 0; b < p.buttons.length; b++) if (p.buttons[b] && p.buttons[b].pressed) pressed.push(b);
-      if (pressed.length) {
-        lines.push('Controller ' + (p.index + 1) + ' (' + (p.mapping || 'geen mapping') + ', ' +
-          p.buttons.length + ' knoppen): ' + pressed.join(', ') + '\n' + p.id);
-      }
-    }
-    if (!lines.length) return;
-    showDebug(lines.join('\n\n') + (dbgEvents.length ? '\n\nOverige invoer:\n' + dbgEvents.join('\n') : ''));
-  }, 100);
 
   // ---------------------------------------------------------------------------
   // Scherm "Sluit je controller aan" automatisch wegklikken met "Toch doorgaan".
@@ -495,203 +438,6 @@
   }, 100);
 
   // ---------------------------------------------------------------------------
-  // Uitgebreide diagnose (ook tijdens een game): houd L1 + R1 + Options 2 s vast.
-  // Toont 60 s lang alles wat de tv doorgeeft: alle controllers (ook "lege"),
-  // knoppen met waarde, ALLE assen, en muis-/aanraak-/toetsgebeurtenissen.
-  // Bedoeld om te zien of het touchpad ergens anders binnenkomt.
-  // ---------------------------------------------------------------------------
-  var diagUntil = 0, diagHoldStart = 0, diagEvents = [], diagBaseline = {};
-  // ---------------------------------------------------------------------------
-  // WebHID: ruwe controllergegevens lezen om het touchpad te zien.
-  //  - Toestemming vragen: tijdens de diagnose op OK/Enter van de AFSTANDSBEDIENING drukken
-  //    (de browser eist een "echte" gebruikersactie; controllerknoppen tellen niet).
-  //  - Apparaten met toestemming worden daarna bij elke start automatisch geopend.
-  //  - Touchpad-klik = Xbox-knop.
-  // ---------------------------------------------------------------------------
-  var hidStatus = 'nee';
-  var hidInfo = [];          // per apparaat een regel voor het diagnosepaneel
-  var hidOpened = [];        // geopende HIDDevice-objecten
-  var hidSupported = 'hid' in navigator && navigator.hid && navigator.hid.getDevices;
-
-  function hidTouchClick(reportId, d) {
-    // DualShock 4-indeling. USB / BT-basisrapport 0x01: byte 6 bit 1 = touchpad-klik.
-    // BT-volledig rapport 0x11: alles 2 bytes verschoven -> byte 8.
-    var idx = reportId === 0x11 ? 8 : (reportId === 0x01 ? 6 : -1);
-    if (idx < 0 || d.byteLength <= idx) return null;
-    return (d.getUint8(idx) & 0x02) !== 0;
-  }
-
-  function hidPadIndex(slot) {
-    // koppel het n-de HID-apparaat aan de n-de verbonden controller
-    var pads = nativeGetGamepads(), list = [];
-    for (var i = 0; i < pads.length; i++) if (pads[i] && pads[i].connected) list.push(pads[i].index);
-    return list.length ? list[Math.min(slot, list.length - 1)] : 0;
-  }
-
-  function hidAttach(dev) {
-    if (hidOpened.indexOf(dev) >= 0) return;
-    var slot = hidOpened.length;
-    hidOpened.push(dev);
-    var name = (dev.productName || 'HID') + ' ' + ('000' + dev.vendorId.toString(16)).slice(-4) + ':' + ('000' + dev.productId.toString(16)).slice(-4);
-    hidInfo[slot] = name + ' · openen…';
-    var wasDown = false, reports = 0;
-    var open = dev.opened ? Promise.resolve() : dev.open();
-    open.then(function () {
-      hidInfo[slot] = name + ' · open, wacht op gegevens';
-      dev.addEventListener('inputreport', function (e) {
-        reports++;
-        var down = hidTouchClick(e.reportId, e.data);
-        if (Date.now() < diagUntil) {
-          var bytes = [];
-          for (var b = 0; b < Math.min(e.data.byteLength, 10); b++) bytes.push(('0' + e.data.getUint8(b).toString(16)).slice(-2));
-          hidInfo[slot] = name + ' · rapport 0x' + e.reportId.toString(16) + ' (' + reports + ')\n    ' + bytes.join(' ') +
-            ' · touch-klik: ' + (down === null ? 'onbekend' : (down ? 'JA' : 'nee'));
-        }
-        if (down && !wasDown) {
-          var pi = hidPadIndex(slot);
-          pressNexus(pi);
-          toast('Xbox-knop via touchpad (controller ' + (pi + 1) + ')');
-        }
-        if (down !== null) wasDown = down;
-      });
-    }).catch(function (err) {
-      hidInfo[slot] = name + ' · openen mislukt: ' + (err && (err.name + ' ' + err.message) || err);
-    });
-  }
-
-  if (hidSupported) {
-    hidStatus = 'ja (controleren…)';
-    navigator.hid.getDevices().then(function (devs) {
-      hidStatus = 'ja, ' + devs.length + ' met toestemming · OK op afstandsbediening = toestemming vragen';
-      devs.forEach(hidAttach);
-    }).catch(function (e) {
-      hidStatus = 'ja, maar geblokkeerd (' + (e && e.name || 'fout') + ')';
-    });
-    if (navigator.hid.addEventListener) {
-      navigator.hid.addEventListener('connect', function (e) { hidAttach(e.device); });
-    }
-    var isOk = function (e) { return e.keyCode === 13 || e.key === 'Enter'; };
-    // Tijdens de diagnose OK/Enter volledig afvangen, zodat xCloud er geen menu mee opent
-    ['keyup', 'keypress'].forEach(function (type) {
-      window.addEventListener(type, function (e) {
-        if (Date.now() > diagUntil || !isOk(e)) return;
-        e.preventDefault(); e.stopImmediatePropagation();
-      }, true);
-    });
-    window.addEventListener('keydown', function (e) {
-      if (Date.now() > diagUntil || !isOk(e)) return;
-      e.preventDefault(); e.stopImmediatePropagation();
-      if (e.repeat) return;
-      requestHid();
-    }, true);
-  }
-
-  function requestHid() {
-    if (!hidSupported) { toast('WebHID wordt niet ondersteund'); return; }
-    if (navigator.userActivation && !navigator.userActivation.isActive) {
-      toast('Gebruik OK op de afstandsbediening (controllerknoppen tellen niet)');
-      return;
-    }
-    hidStatus = 'toestemming gevraagd…';
-    toast('WebHID: toestemming gevraagd…');
-    var report = function (msg) { hidStatus = msg; toast('WebHID: ' + msg); };
-    try {
-      navigator.hid.requestDevice({ filters: [] }).then(function (devs) {
-        report(devs.length ? 'gekozen: ' + devs.map(function (d) { return d.productName || 'HID'; }).join(', ')
-                           : 'niets gekozen (of geen keuzevenster mogelijk)');
-        devs.forEach(hidAttach);
-      }).catch(function (err) {
-        report('mislukt: ' + (err && (err.name + ' ' + err.message) || err));
-      });
-    } catch (err) {
-      report('mislukt: ' + (err && err.message || err));
-    }
-  }
-
-  function diagLog(txt) {
-    if (Date.now() > diagUntil) return;
-    var t = new Date();
-    diagEvents.push(('0' + t.getSeconds()).slice(-2) + '.' + ('00' + t.getMilliseconds()).slice(-3).slice(0, 1) + ' ' + txt);
-    if (diagEvents.length > 8) diagEvents.shift();
-  }
-  ['keydown', 'keyup', 'mousedown', 'mouseup', 'mousemove', 'click', 'wheel', 'pointerdown', 'pointermove',
-   'touchstart', 'touchmove', 'contextmenu', 'gamepadconnected', 'gamepaddisconnected'].forEach(function (type) {
-    var handler = function (e) {
-      if (Date.now() > diagUntil) return;
-      var info = type;
-      if (type.indexOf('key') === 0) info += ' code=' + e.keyCode + ' key=' + e.key;
-      else if (type.indexOf('gamepad') === 0) info += ' #' + (e.gamepad && e.gamepad.index) + ' ' + (e.gamepad && e.gamepad.id || '').slice(0, 30);
-      else if (e.clientX !== undefined) info += ' x=' + Math.round(e.clientX) + ' y=' + Math.round(e.clientY) + (e.button !== undefined ? ' btn=' + e.button : '') + (e.pointerType ? ' ' + e.pointerType : '');
-      else if (e.touches) info += ' touches=' + e.touches.length;
-      if ((type === 'mousemove' || type === 'pointermove' || type === 'touchmove') &&
-          diagEvents.length && diagEvents[diagEvents.length - 1].indexOf(type) > 0) diagEvents.pop();
-      diagLog(info);
-    };
-    window.addEventListener(type, handler, true);
-    document.addEventListener(type, handler, true);
-  });
-
-  function renderDiag() {
-    var el = document.getElementById('xc-coop-diag');
-    if (Date.now() > diagUntil) { if (el) el.style.display = 'none'; return; }
-    if (!document.body) return;
-    if (!el) {
-      el = document.createElement('pre');
-      el.id = 'xc-coop-diag';
-      el.style.cssText = 'position:fixed;right:48px;top:28px;z-index:2147483647;margin:0;width:46vw;max-height:85vh;overflow:hidden;' +
-        'background:rgba(0,0,0,.88);color:#7CFC7C;font:15px/1.35 monospace;padding:10px 12px;border-radius:8px;' +
-        'pointer-events:none;white-space:pre-wrap';
-      document.documentElement.appendChild(el);
-    }
-    var pads = nativeGetGamepads();
-    var lines = ['DIAGNOSE (' + Math.ceil((diagUntil - Date.now()) / 1000) + ' s) · slots: ' + pads.length,
-      'WebHID: ' + hidStatus];
-    for (var h = 0; h < hidInfo.length; h++) if (hidInfo[h]) lines.push('  HID ' + (h + 1) + ': ' + hidInfo[h]);
-    for (var i = 0; i < pads.length; i++) {
-      var p = pads[i];
-      if (!p) { lines.push('#' + i + ': leeg'); continue; }
-      var pressed = [];
-      for (var b = 0; b < p.buttons.length; b++) {
-        var v = p.buttons[b].value;
-        if (p.buttons[b].pressed || v > 0.05) pressed.push(b + (v > 0 && v < 1 ? '(' + v.toFixed(2) + ')' : ''));
-      }
-      var base = diagBaseline[i] || (diagBaseline[i] = p.axes.slice());
-      var axes = [];
-      for (var a = 0; a < p.axes.length; a++) {
-        var val = p.axes[a];
-        var mark = Math.abs(val - (base[a] || 0)) > 0.15 ? '*' : '';
-        axes.push(a + ':' + val.toFixed(2) + mark);
-      }
-      lines.push('#' + p.index + ' ' + (p.connected ? '' : '(los) ') + p.id.slice(0, 42));
-      lines.push('  ' + (p.mapping || 'geen mapping') + ' · ' + p.buttons.length + ' knoppen · ' + p.axes.length + ' assen');
-      lines.push('  knoppen: ' + (pressed.join(' ') || '-'));
-      lines.push('  assen: ' + axes.join(' '));
-    }
-    lines.push('');
-    lines.push('gebeurtenissen:');
-    lines.push(diagEvents.length ? diagEvents.join('\n') : '-');
-    el.textContent = lines.join('\n');
-    el.style.display = 'block';
-  }
-
-  setInterval(function () {
-    var pads = nativeGetGamepads(), held = false;
-    for (var i = 0; i < pads.length; i++) {
-      var p = pads[i];
-      if (p && p.connected && p.buttons && p.buttons.length > 9 &&
-          p.buttons[4].pressed && p.buttons[5].pressed && p.buttons[9].pressed) { held = true; break; }
-    }
-    if (held) {
-      if (!diagHoldStart) diagHoldStart = Date.now();
-      else if (Date.now() - diagHoldStart >= 2000 && Date.now() > diagUntil) {
-        diagUntil = Date.now() + 60000; diagEvents = []; diagBaseline = {};
-        toast('Diagnose 60 s aan · druk nu op het touchpad');
-      }
-    } else diagHoldStart = 0;
-    renderDiag();
-  }, 100);
-
-  // ---------------------------------------------------------------------------
   // Controllertest (eigen overlay). Toont per controller alle knoppen met PS- en
   // Xbox-namen, sticks en triggers. xCloud krijgt zolang geen invoer.
   // Sluiten: houd ○ / B 1 seconde vast (of wacht 2 minuten).
@@ -767,7 +513,7 @@
     clearInterval(testerTimer);
     var el = document.getElementById('xc-coop-tester');
     if (el) el.remove();
-    setTimeout(function () { if (!testerOpen && !cursorOn) setGamepadOverride(false); }, 300); // even wachten tot ○ is losgelaten
+    setTimeout(function () { if (!inputBlocked()) setGamepadOverride(false); }, 300); // even wachten tot ○ is losgelaten
   }
 
   // ---------------------------------------------------------------------------
@@ -861,7 +607,7 @@
     } else {
       clearInterval(cur.timer);
       if (cur.el) cur.el.style.display = 'none';
-      setTimeout(function () { if (!testerOpen && !cursorOn) setGamepadOverride(false); }, 300);
+      setTimeout(function () { if (!inputBlocked()) setGamepadOverride(false); }, 300);
       toast('Cursor uit');
     }
   }
@@ -871,7 +617,7 @@
     var pads = nativeGetGamepads(), held = false;
     for (var i = 0; i < pads.length; i++) {
       var p = pads[i];
-      if (p && p.connected && p.buttons[10] && p.buttons[11] && p.buttons[10].pressed && p.buttons[11].pressed) held = true;
+      if (p && p.connected && p.buttons && p.buttons[10] && p.buttons[11] && p.buttons[10].pressed && p.buttons[11].pressed) held = true;
     }
     if (!held) { cur.comboStart = 0; cur.comboFired = false; return; }
     if (!cur.comboStart) cur.comboStart = Date.now();
@@ -879,39 +625,111 @@
   }, 50);
 
   // ---------------------------------------------------------------------------
-  // Knoppen in de bovenbalk van xCloud (zoals Better xCloud dat doet)
+  // Co-op-menu rechts: openen met L1 + R1 + Options (L1 + L2 + Options werkt ook).
+  // D-pad / linkerstick = kiezen, ✕ / A = uitvoeren, ○ / B = sluiten.
+  // Zolang het menu open is, krijgt xCloud geen controllerinvoer.
   // ---------------------------------------------------------------------------
-  function makeHeaderButton(label, title, onClick) {
-    var b = document.createElement('button');
-    b.type = 'button';
-    b.textContent = label;
-    b.title = title;
-    b.tabIndex = 0;
-    b.style.cssText = 'margin-left:8px;padding:6px 14px;border-radius:999px;border:2px solid rgba(255,255,255,.35);' +
-      'background:rgba(0,0,0,.35);color:#fff;font:600 14px/1.2 system-ui,sans-serif;cursor:pointer;white-space:nowrap';
-    b.addEventListener('focus', function () { b.style.borderColor = '#fff'; b.style.background = 'rgba(16,124,16,.85)'; });
-    b.addEventListener('blur', function () { b.style.borderColor = 'rgba(255,255,255,.35)'; b.style.background = 'rgba(0,0,0,.35)'; });
-    b.addEventListener('click', function (e) { e.preventDefault(); e.stopPropagation(); onClick(); });
-    return b;
+  var menu = { sel: 0, pad: 0, el: null, timer: null, prev: {}, repeatAt: 0, comboStart: 0, waitRelease: false };
+
+  function menuItems() {
+    return [
+      { label: 'Xbox-menu openen', run: function (pi) { closeMenu(); setTimeout(function () { pressNexus(pi); }, 350); } },
+      { label: 'Muiscursor aan', run: function () { closeMenu(); setTimeout(function () { setCursor(true); }, 350); } },
+      { label: 'Controllertest', run: function () { closeMenu(); setTimeout(openTester, 350); } },
+      { label: 'Vermomming (Windows): ' + (UA_SPOOF ? 'aan' : 'uit'), run: function () {
+          try { window.localStorage.setItem(UA_KEY, UA_SPOOF ? 'off' : 'on'); } catch (e) {}
+          toast('Vermomming ' + (UA_SPOOF ? 'uit' : 'aan') + ' · herladen…');
+          closeMenu();
+          setTimeout(function () { location.reload(); }, 900);
+        } },
+      { label: 'Nieuwste versie laden', run: function () { closeMenu(); updateAndReload(); } },
+      { label: 'Sluiten', run: function () { closeMenu(); } }
+    ];
   }
-  var headerWrap = null;
-  function checkHeader() {
-    var header = document.querySelector('#gamepass-root header[class^=Header-module__header]') ||
-                 document.querySelector('header[class*=Header-module__header]');
-    if (!header) return;
-    if (headerWrap && header.contains(headerWrap)) return;
-    var target = header.querySelector('div[class*=EdgewaterHeader-module__rightSectionSpacing], div[class*=RemotePlayHeader-module__rightSectionSpacing]') || header;
-    if (!headerWrap) {
-      headerWrap = document.createElement('div');
-      headerWrap.id = 'xc-coop-header';
-      headerWrap.style.cssText = 'display:flex;align-items:center';
-      headerWrap.appendChild(makeHeaderButton('↻ Herladen', 'Nieuwste co-op-versie ophalen en herladen', updateAndReload));
-      headerWrap.appendChild(makeHeaderButton('🎮 Controllertest', 'Laat zien wat de tv van je controllers doorgeeft', openTester));
-      if (hidSupported) headerWrap.appendChild(makeHeaderButton('Touchpad koppelen', 'Toestemming vragen voor de controller (WebHID) — druk op OK van de afstandsbediening', requestHid));
+
+  function renderMenu() {
+    if (!menu.el) return;
+    var items = menuItems(), html = [];
+    html.push('<div style="font-size:20px;font-weight:700;margin-bottom:4px">xCloud Co-op</div>' +
+      '<div style="font-size:13px;opacity:.7;margin-bottom:14px">v' + VERSION + ' · ' + (uaSpoofed ? 'win' : 'tizen') +
+      ' · ' + connectedPads().length + ' controller(s)</div>');
+    for (var i = 0; i < items.length; i++) {
+      var on = i === menu.sel;
+      html.push('<div style="padding:12px 14px;margin:4px 0;border-radius:10px;font-weight:600;' +
+        (on ? 'background:#107c10;color:#fff;box-shadow:0 0 0 3px #fff inset' : 'background:rgba(255,255,255,.08);color:#ddd') +
+        '">' + items[i].label + '</div>');
     }
-    target.appendChild(headerWrap);
+    html.push('<div style="font-size:12px;opacity:.6;margin-top:14px;line-height:1.5">✕ kiezen · ○ sluiten<br>' +
+      'Sneltoetsen: Share+Options = Xbox-menu · L3+R3 = cursor · L1+R1+Share = herladen</div>');
+    menu.el.innerHTML = html.join('');
   }
-  setInterval(checkHeader, 1000);
+
+  function menuTick() {
+    var pads = nativeGetGamepads(), p = null;
+    for (var i = 0; i < pads.length; i++) if (pads[i] && pads[i].connected && pads[i].index === menu.pad) p = pads[i];
+    if (!p) for (var j = 0; j < pads.length; j++) if (pads[j] && pads[j].connected) { p = pads[j]; break; }
+    if (!p) return;
+    var B = function (n) { return !!(p.buttons[n] && p.buttons[n].pressed); };
+    var up = B(12) || p.axes[1] < -0.6, down = B(13) || p.axes[1] > 0.6, a = B(0), b = B(1);
+    if (menu.waitRelease) {               // eerst de openingscombinatie loslaten
+      if (!B(4) && !B(5) && !B(6) && !B(9) && !a) menu.waitRelease = false;
+      menu.prev = { up: up, down: down, a: a, b: b };
+      return;
+    }
+    var now = Date.now(), items = menuItems();
+    var dir = up ? -1 : (down ? 1 : 0);
+    if (dir && (!(menu.prev.up || menu.prev.down) || now >= menu.repeatAt)) {
+      menu.sel = (menu.sel + dir + items.length) % items.length;
+      menu.repeatAt = now + ((menu.prev.up || menu.prev.down) ? 130 : 380);
+      renderMenu();
+    }
+    if (a && !menu.prev.a) items[menu.sel].run(p.index);
+    else if (b && !menu.prev.b) closeMenu();
+    menu.prev = { up: up, down: down, a: a, b: b };
+  }
+
+  function openMenu(padIndex) {
+    if (menuOpen || testerOpen) return;
+    if (cursorOn) setCursor(false);
+    menuOpen = true;
+    menu.pad = padIndex; menu.sel = 0; menu.waitRelease = true; menu.prev = {};
+    setGamepadOverride(true);
+    var el = document.createElement('div');
+    el.id = 'xc-coop-menu';
+    el.style.cssText = 'position:fixed;top:6vh;right:3vw;width:340px;max-height:88vh;overflow:auto;z-index:2147483646;' +
+      'background:rgba(16,16,16,.96);color:#fff;font:16px/1.35 system-ui,sans-serif;padding:18px 18px 14px;' +
+      'border-radius:16px;border:2px solid #333;box-shadow:0 10px 40px rgba(0,0,0,.6)';
+    document.documentElement.appendChild(el);
+    menu.el = el;
+    renderMenu();
+    menu.timer = setInterval(menuTick, 30);
+  }
+
+  function closeMenu() {
+    if (!menuOpen) return;
+    menuOpen = false;
+    clearInterval(menu.timer);
+    if (menu.el) menu.el.remove();
+    menu.el = null;
+    setTimeout(function () { if (!inputBlocked()) setGamepadOverride(false); }, 300);
+  }
+
+  // L1 + R1 + Options (of L1 + L2 + Options) 0,4 s vasthouden = menu openen/sluiten
+  setInterval(function () {
+    var pads = nativeGetGamepads(), who = -1;
+    for (var i = 0; i < pads.length; i++) {
+      var p = pads[i];
+      if (!p || !p.connected || !p.buttons || p.buttons.length < 10) continue;
+      var B = function (n) { return !!(p.buttons[n] && p.buttons[n].pressed); };
+      if (B(4) && (B(5) || B(6)) && B(9)) { who = p.index; break; }
+    }
+    if (who < 0) { menu.comboStart = 0; return; }
+    if (!menu.comboStart) menu.comboStart = Date.now();
+    else if (menu.comboStart > 0 && Date.now() - menu.comboStart >= 400) {
+      menu.comboStart = -1; // pas opnieuw na loslaten
+      if (menuOpen) closeMenu(); else openMenu(who);
+    }
+  }, 50);
 
   // ---------------------------------------------------------------------------
   // 4. Co-op aanzetten zodra de stream echt speelt
