@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         xCloud Co-op (Tizen)
 // @description  Alleen lokale co-op (meerdere controllers) voor xbox.com/play. Gebaseerd op de co-op-patch van Better xCloud (MIT, © redphx).
-// @version      3.2.0
+// @version      3.3.0
 // @match        https://www.xbox.com/*/play*
 // @run-at       document-start
 // @grant        none
@@ -13,7 +13,7 @@
   if (window.__xcCoop) return;
   window.__xcCoop = true;
 
-  var VERSION = '3.2.0';
+  var VERSION = '3.3.0';
   var TAG = '[xCloud co-op]';
   function log() { console.log.apply(console, [TAG].concat([].slice.call(arguments))); }
 
@@ -236,10 +236,9 @@
   };
 
   // ---------------------------------------------------------------------------
-  // Vervanging voor de Xbox-knop: houd View + Menu 1 seconde ingedrukt
-  // (PS-stijl: Share + Options). De tv vangt de echte Xbox/PS-knop af, dus
-  // we laten xCloud zelf denken dat knop 16 (Xbox-knop) wordt ingedrukt door
-  // de controllerstatus die xCloud uitleest heel even aan te passen.
+  // Nagebootste Xbox-knop (gebruikt door "Xbox-menu" in het co-op-menu).
+  // De tv vangt de echte Xbox/PS-knop af, dus we laten xCloud even denken dat
+  // knop 16 (Xbox-knop) wordt ingedrukt. Options lang vasthouden doet xCloud zelf al.
   // ---------------------------------------------------------------------------
   var nativeGetGamepads = navigator.getGamepads ? navigator.getGamepads.bind(navigator) : function () { return []; };
   var NEXUS_MS = 200;
@@ -300,26 +299,6 @@
       if (!inputBlocked()) setGamepadOverride(false);
     }, NEXUS_MS + 100);
   }
-
-  var HOLD_MS = 1000;
-  var holdStart = {};
-  var holdFired = {};
-  setInterval(function () {
-    var pads = nativeGetGamepads();
-    var now = Date.now();
-    for (var i = 0; i < pads.length; i++) {
-      var p = pads[i];
-      if (!p || !p.connected || !p.buttons || p.buttons.length < 10) continue;
-      var held = p.buttons[8].pressed && p.buttons[9].pressed;
-      if (!held) { holdStart[p.index] = 0; holdFired[p.index] = false; continue; }
-      if (!holdStart[p.index]) holdStart[p.index] = now;
-      if (!holdFired[p.index] && now - holdStart[p.index] >= HOLD_MS) {
-        holdFired[p.index] = true;
-        pressNexus(p.index);
-        toast('Xbox-knop (controller ' + (p.index + 1) + ')');
-      }
-    }
-  }, 50);
 
   // ---------------------------------------------------------------------------
   // Scherm "Sluit je controller aan" automatisch wegklikken met "Toch doorgaan".
@@ -578,7 +557,7 @@
   }, 50);
 
   // ---------------------------------------------------------------------------
-  // Kindvriendelijk menu rechts: openen door Options 3 seconden vast te houden.
+  // Kindvriendelijk menu rechts: openen door Share 3 seconden vast te houden.
   // "Xbox-menu" staat altijd als eerste geselecteerd. D-pad / linkerstick = kiezen,
   // ✕ / A = uitvoeren, ○ / B = sluiten. Gaat vanzelf dicht na 30 s niets doen.
   // Zolang het menu open is, krijgt xCloud geen controllerinvoer.
@@ -633,7 +612,7 @@
     var B = function (n) { return !!(p.buttons[n] && p.buttons[n].pressed); };
     var up = B(12) || p.axes[1] < -0.6, down = B(13) || p.axes[1] > 0.6, a = B(0), b = B(1);
     if (menu.waitRelease) {               // eerst de openingscombinatie loslaten
-      if (!B(9) && !a) menu.waitRelease = false;
+      if (!B(8) && !a) menu.waitRelease = false;
       menu.prev = { up: up, down: down, a: a, b: b };
       return;
     }
@@ -677,20 +656,21 @@
     setTimeout(function () { if (!inputBlocked()) setGamepadOverride(false); }, 300);
   }
 
-  // Options 3 seconden vasthouden (zonder Share) = menu openen
+  // Share 3 seconden vasthouden (zonder Options) = co-op-menu openen.
+  // (Options lang vasthouden opent in xCloud zelf al het Xbox-menu.)
   var MENU_HOLD_MS = 3000;
   setInterval(function () {
     var pads = nativeGetGamepads(), who = -1;
     for (var i = 0; i < pads.length; i++) {
       var p = pads[i];
       if (!p || !p.connected || !p.buttons || p.buttons.length < 10) continue;
-      if (p.buttons[9].pressed && !p.buttons[8].pressed) { who = p.index; break; }
+      if (p.buttons[8].pressed && !p.buttons[9].pressed) { who = p.index; break; }
     }
     if (who < 0 || menuOpen || testerOpen) { menu.comboStart = 0; menu.hintShown = false; return; }
     if (!menu.comboStart) { menu.comboStart = Date.now(); return; }
     if (menu.comboStart < 0) return; // pas opnieuw na loslaten
     var held = Date.now() - menu.comboStart;
-    if (held >= 1000 && !menu.hintShown) { menu.hintShown = true; toast('Blijf vasthouden voor het menu…'); }
+    if (held >= 1000 && !menu.hintShown) { menu.hintShown = true; toast('Blijf vasthouden voor het co-op-menu…'); }
     if (held >= MENU_HOLD_MS) { menu.comboStart = -1; openMenu(who); }
   }, 50);
 
