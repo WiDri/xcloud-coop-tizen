@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         xCloud Co-op (Tizen)
 // @description  Alleen lokale co-op (meerdere controllers) voor xbox.com/play. Gebaseerd op de co-op-patch van Better xCloud (MIT, © redphx).
-// @version      2.6.0
+// @version      2.7.0
 // @match        https://www.xbox.com/*/play*
 // @run-at       document-start
 // @grant        none
@@ -13,7 +13,7 @@
   if (window.__xcCoop) return;
   window.__xcCoop = true;
 
-  var VERSION = '2.6.0';
+  var VERSION = '2.7.0';
 
   // ---------------------------------------------------------------------------
   // 0. Browser vermommen als Windows/Edge, zodat xCloud niet de route van de
@@ -487,6 +487,16 @@
   // Bedoeld om te zien of het touchpad ergens anders binnenkomt.
   // ---------------------------------------------------------------------------
   var diagUntil = 0, diagHoldStart = 0, diagEvents = [], diagBaseline = {};
+  // Kan de pagina ruwe HID-gegevens van de controller lezen? (enige manier om het touchpad te zien)
+  var hidStatus = 'nee';
+  if ('hid' in navigator && navigator.hid && navigator.hid.getDevices) {
+    hidStatus = 'ja (controleren…)';
+    navigator.hid.getDevices().then(function (devs) {
+      hidStatus = 'ja, ' + devs.length + ' apparaat/apparaten met toestemming';
+    }).catch(function (e) {
+      hidStatus = 'ja, maar geblokkeerd (' + (e && e.name || 'fout') + ')';
+    });
+  }
   function diagLog(txt) {
     if (Date.now() > diagUntil) return;
     var t = new Date();
@@ -523,7 +533,9 @@
       document.documentElement.appendChild(el);
     }
     var pads = nativeGetGamepads();
-    var lines = ['DIAGNOSE (' + Math.ceil((diagUntil - Date.now()) / 1000) + ' s) · slots: ' + pads.length];
+    var lines = ['DIAGNOSE (' + Math.ceil((diagUntil - Date.now()) / 1000) + ' s) · slots: ' + pads.length,
+      'WebHID: ' + hidStatus + ' · WebUSB: ' + ('usb' in navigator ? 'ja' : 'nee') +
+      ' · Bluetooth: ' + ('bluetooth' in navigator ? 'ja' : 'nee')];
     for (var i = 0; i < pads.length; i++) {
       var p = pads[i];
       if (!p) { lines.push('#' + i + ': leeg'); continue; }
