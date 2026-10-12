@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         xCloud Co-op (Tizen)
 // @description  Alleen lokale co-op (meerdere controllers) voor xbox.com/play. Gebaseerd op de co-op-patch van Better xCloud (MIT, © redphx).
-// @version      2.1.0
+// @version      2.2.0
 // @match        https://www.xbox.com/*/play*
 // @run-at       document-start
 // @grant        none
@@ -13,7 +13,34 @@
   if (window.__xcCoop) return;
   window.__xcCoop = true;
 
-  var VERSION = '2.1.0';
+  var VERSION = '2.2.0';
+
+  // ---------------------------------------------------------------------------
+  // 0. Browser vermommen als Windows/Edge, zodat xCloud niet de route van de
+  //    officiële Samsung-app kiest (die controllers via Samsung zelf herkent).
+  //    Werkt alleen als dit script vroeg genoeg draait (via de cache van de loader).
+  //    Zet UA_SPOOF op false om dit uit te schakelen.
+  // ---------------------------------------------------------------------------
+  var UA_SPOOF = true;
+  var uaSpoofed = false;
+  if (UA_SPOOF && /Tizen|SMART-TV/i.test(navigator.userAgent)) {
+    try {
+      var m = navigator.userAgent.match(/Chrome\/(\d+\.\d+\.\d+\.\d+)/) ||
+              navigator.userAgent.match(/(\d{2,3}\.\d+\.\d+\.\d+)\/[\d.]+ TV/);
+      var cv = m ? m[1] : '120.0.0.0';
+      var fakeUA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/' +
+        cv + ' Safari/537.36 Edg/' + cv;
+      var orgUA = navigator.userAgent;
+      Object.defineProperty(navigator, 'orgUserAgent', { get: function () { return orgUA; }, configurable: true });
+      Object.defineProperty(navigator, 'userAgent', { get: function () { return fakeUA; }, configurable: true });
+      Object.defineProperty(navigator, 'appVersion', { get: function () { return fakeUA.replace('Mozilla/', ''); }, configurable: true });
+      Object.defineProperty(navigator, 'platform', { get: function () { return 'Win32'; }, configurable: true });
+      if ('userAgentData' in navigator) {
+        Object.defineProperty(navigator, 'userAgentData', { get: function () { return undefined; }, configurable: true });
+      }
+      uaSpoofed = true;
+    } catch (e) { console.error('[xCloud co-op] UA-vermomming mislukt', e); }
+  }
   var TAG = '[xCloud co-op]';
   function log() { console.log.apply(console, [TAG].concat([].slice.call(arguments))); }
 
@@ -113,31 +140,47 @@
 
   var MARKER = 'this.gamepadMappingsToSend=[],';
   var INJECT = 'true;(' + installCoop.toString() + ').call(this);true,';
-  var patched = false;
+  var patched = false; // co-op-patch toegepast
+  var COMBINED = 'this.useCombinedAudioVideoStream=!!this.deviceInformation.isTizen';
+  var PATCHES = [
+    { name: 'coop', find: MARKER, apply: function (src) { return src.replace(MARKER, MARKER + INJECT); } },
+    // Met een vermomde browser denkt xCloud dat het geen Tizen is; de tv heeft de
+    // gecombineerde audio/videostream wel nodig, dus die zetten we vast aan.
+    { name: 'combined', find: COMBINED, apply: function (src) { return src.replace(COMBINED, 'this.useCombinedAudioVideoStream=true'); } }
+  ];
+  var donePatches = {};
+
+  function rebuild(src) {
+    if (/^\d+\s*\(/.test(src)) return '(function ' + src.replace(/^\d+/, '') + ')';      // 123(e,t,n){...}
+    if (/^function[\s(]/.test(src)) return '(' + src + ')';                              // function(e,t,n){...}
+    if (/^[\w$]+\s*\(/.test(src)) return '(function ' + src.replace(/^[\w$]+/, '') + ')'; // naam(e,t,n){...}
+    return '(' + src + ')';                                                                // (e,t,n)=>{...}
+  }
 
   function patchModules(modules) {
-    if (patched || !modules) return;
+    if (!modules) return;
+    var todo = PATCHES.filter(function (p) { return !donePatches[p.name] && (p.name !== 'combined' || uaSpoofed); });
+    if (!todo.length) return;
     for (var id in modules) {
       var fn = modules[id];
       if (typeof fn !== 'function') continue;
       var src = fn.toString();
-      if (src.indexOf(MARKER) < 0) continue;
-
-      src = src.replace(MARKER, MARKER + INJECT);
-      var code;
-      if (/^\d+\s*\(/.test(src)) code = '(function ' + src.replace(/^\d+/, '') + ')';      // 123(e,t,n){...}
-      else if (/^function[\s(]/.test(src)) code = '(' + src + ')';                         // function(e,t,n){...}
-      else if (/^[\w$]+\s*\(/.test(src)) code = '(function ' + src.replace(/^[\w$]+/, '') + ')'; // naam(e,t,n){...}
-      else code = '(' + src + ')';                                                            // (e,t,n)=>{...}
-
+      var applied = [];
+      for (var i = 0; i < todo.length; i++) {
+        if (!donePatches[todo[i].name] && src.indexOf(todo[i].find) >= 0) {
+          src = todo[i].apply(src);
+          applied.push(todo[i].name);
+        }
+      }
+      if (!applied.length) continue;
       try {
-        modules[id] = (0, eval)(code);
-        patched = true;
-        log('module ' + id + ' gepatcht');
+        modules[id] = (0, eval)(rebuild(src));
+        applied.forEach(function (n) { donePatches[n] = true; });
+        if (donePatches.coop) patched = true;
+        log('module ' + id + ' gepatcht: ' + applied.join(', '));
       } catch (err) {
         console.error(TAG, 'kon module ' + id + ' niet herschrijven', err);
       }
-      return;
     }
   }
 
@@ -386,7 +429,7 @@
     if (document.getElementById('xc-coop-version')) return;
     var el = document.createElement('div');
     el.id = 'xc-coop-version';
-    el.textContent = 'co-op v' + VERSION;
+    el.textContent = 'co-op v' + VERSION + (uaSpoofed ? ' · win' : ' · tizen');
     el.style.cssText = 'position:fixed;left:48px;top:28px;z-index:2147483647;pointer-events:none;' +
       'background:rgba(0,0,0,.55);color:#fff;font:600 13px/1 system-ui,sans-serif;' +
       'padding:4px 7px;border-radius:5px;opacity:.75';
