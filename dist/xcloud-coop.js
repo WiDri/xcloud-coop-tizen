@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         xCloud Co-op (Tizen)
 // @description  Alleen lokale co-op (meerdere controllers) voor xbox.com/play. Gebaseerd op de co-op-patch van Better xCloud (MIT, © redphx).
-// @version      2.8.0
+// @version      2.10.0
 // @match        https://www.xbox.com/*/play*
 // @run-at       document-start
 // @grant        none
@@ -13,7 +13,7 @@
   if (window.__xcCoop) return;
   window.__xcCoop = true;
 
-  var VERSION = '2.8.0';
+  var VERSION = '2.10.0';
 
   // ---------------------------------------------------------------------------
   // 0. Browser vermommen als Windows/Edge, zodat xCloud niet de route van de
@@ -556,20 +556,42 @@
     if (navigator.hid.addEventListener) {
       navigator.hid.addEventListener('connect', function (e) { hidAttach(e.device); });
     }
+    var isOk = function (e) { return e.keyCode === 13 || e.key === 'Enter'; };
+    // Tijdens de diagnose OK/Enter volledig afvangen, zodat xCloud er geen menu mee opent
+    ['keyup', 'keypress'].forEach(function (type) {
+      window.addEventListener(type, function (e) {
+        if (Date.now() > diagUntil || !isOk(e)) return;
+        e.preventDefault(); e.stopImmediatePropagation();
+      }, true);
+    });
     window.addEventListener('keydown', function (e) {
-      if (Date.now() > diagUntil || (e.keyCode !== 13 && e.key !== 'Enter')) return;
-      hidStatus = 'toestemming gevraagd…';
-      try {
-        navigator.hid.requestDevice({ filters: [] }).then(function (devs) {
-          hidStatus = 'gekozen: ' + devs.length + ' apparaat/apparaten';
-          devs.forEach(hidAttach);
-        }).catch(function (err) {
-          hidStatus = 'toestemming mislukt: ' + (err && (err.name + ' ' + err.message) || err);
-        });
-      } catch (err) {
-        hidStatus = 'toestemming mislukt: ' + (err && err.message || err);
-      }
+      if (Date.now() > diagUntil || !isOk(e)) return;
+      e.preventDefault(); e.stopImmediatePropagation();
+      if (e.repeat) return;
+      requestHid();
     }, true);
+  }
+
+  function requestHid() {
+    if (!hidSupported) { toast('WebHID wordt niet ondersteund'); return; }
+    if (navigator.userActivation && !navigator.userActivation.isActive) {
+      toast('Gebruik OK op de afstandsbediening (controllerknoppen tellen niet)');
+      return;
+    }
+    hidStatus = 'toestemming gevraagd…';
+    toast('WebHID: toestemming gevraagd…');
+    var report = function (msg) { hidStatus = msg; toast('WebHID: ' + msg); };
+    try {
+      navigator.hid.requestDevice({ filters: [] }).then(function (devs) {
+        report(devs.length ? 'gekozen: ' + devs.map(function (d) { return d.productName || 'HID'; }).join(', ')
+                           : 'niets gekozen (of geen keuzevenster mogelijk)');
+        devs.forEach(hidAttach);
+      }).catch(function (err) {
+        report('mislukt: ' + (err && (err.name + ' ' + err.message) || err));
+      });
+    } catch (err) {
+      report('mislukt: ' + (err && err.message || err));
+    }
   }
 
   function diagLog(txt) {
@@ -654,6 +676,40 @@
     } else diagHoldStart = 0;
     renderDiag();
   }, 100);
+
+  // ---------------------------------------------------------------------------
+  // Knoppen in de bovenbalk van xCloud (zoals Better xCloud dat doet)
+  // ---------------------------------------------------------------------------
+  function makeHeaderButton(label, title, onClick) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = label;
+    b.title = title;
+    b.tabIndex = 0;
+    b.style.cssText = 'margin-left:8px;padding:6px 14px;border-radius:999px;border:2px solid rgba(255,255,255,.35);' +
+      'background:rgba(0,0,0,.35);color:#fff;font:600 14px/1.2 system-ui,sans-serif;cursor:pointer;white-space:nowrap';
+    b.addEventListener('focus', function () { b.style.borderColor = '#fff'; b.style.background = 'rgba(16,124,16,.85)'; });
+    b.addEventListener('blur', function () { b.style.borderColor = 'rgba(255,255,255,.35)'; b.style.background = 'rgba(0,0,0,.35)'; });
+    b.addEventListener('click', function (e) { e.preventDefault(); e.stopPropagation(); onClick(); });
+    return b;
+  }
+  var headerWrap = null;
+  function checkHeader() {
+    var header = document.querySelector('#gamepass-root header[class^=Header-module__header]') ||
+                 document.querySelector('header[class*=Header-module__header]');
+    if (!header) return;
+    if (headerWrap && header.contains(headerWrap)) return;
+    var target = header.querySelector('div[class*=EdgewaterHeader-module__rightSectionSpacing], div[class*=RemotePlayHeader-module__rightSectionSpacing]') || header;
+    if (!headerWrap) {
+      headerWrap = document.createElement('div');
+      headerWrap.id = 'xc-coop-header';
+      headerWrap.style.cssText = 'display:flex;align-items:center';
+      headerWrap.appendChild(makeHeaderButton('↻ Herladen', 'Nieuwste co-op-versie ophalen en herladen', updateAndReload));
+      if (hidSupported) headerWrap.appendChild(makeHeaderButton('Touchpad koppelen', 'Toestemming vragen voor de controller (WebHID) — druk op OK van de afstandsbediening', requestHid));
+    }
+    target.appendChild(headerWrap);
+  }
+  setInterval(checkHeader, 1000);
 
   // ---------------------------------------------------------------------------
   // 4. Co-op aanzetten zodra de stream echt speelt
