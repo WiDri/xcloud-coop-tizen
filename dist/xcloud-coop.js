@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         xCloud Co-op (Tizen)
 // @description  Alleen lokale co-op (meerdere controllers) voor xbox.com/play. Gebaseerd op de co-op-patch van Better xCloud (MIT, © redphx).
-// @version      2.7.0
+// @version      2.8.0
 // @match        https://www.xbox.com/*/play*
 // @run-at       document-start
 // @grant        none
@@ -13,7 +13,7 @@
   if (window.__xcCoop) return;
   window.__xcCoop = true;
 
-  var VERSION = '2.7.0';
+  var VERSION = '2.8.0';
 
   // ---------------------------------------------------------------------------
   // 0. Browser vermommen als Windows/Edge, zodat xCloud niet de route van de
@@ -487,16 +487,91 @@
   // Bedoeld om te zien of het touchpad ergens anders binnenkomt.
   // ---------------------------------------------------------------------------
   var diagUntil = 0, diagHoldStart = 0, diagEvents = [], diagBaseline = {};
-  // Kan de pagina ruwe HID-gegevens van de controller lezen? (enige manier om het touchpad te zien)
+  // ---------------------------------------------------------------------------
+  // WebHID: ruwe controllergegevens lezen om het touchpad te zien.
+  //  - Toestemming vragen: tijdens de diagnose op OK/Enter van de AFSTANDSBEDIENING drukken
+  //    (de browser eist een "echte" gebruikersactie; controllerknoppen tellen niet).
+  //  - Apparaten met toestemming worden daarna bij elke start automatisch geopend.
+  //  - Touchpad-klik = Xbox-knop.
+  // ---------------------------------------------------------------------------
   var hidStatus = 'nee';
-  if ('hid' in navigator && navigator.hid && navigator.hid.getDevices) {
+  var hidInfo = [];          // per apparaat een regel voor het diagnosepaneel
+  var hidOpened = [];        // geopende HIDDevice-objecten
+  var hidSupported = 'hid' in navigator && navigator.hid && navigator.hid.getDevices;
+
+  function hidTouchClick(reportId, d) {
+    // DualShock 4-indeling. USB / BT-basisrapport 0x01: byte 6 bit 1 = touchpad-klik.
+    // BT-volledig rapport 0x11: alles 2 bytes verschoven -> byte 8.
+    var idx = reportId === 0x11 ? 8 : (reportId === 0x01 ? 6 : -1);
+    if (idx < 0 || d.byteLength <= idx) return null;
+    return (d.getUint8(idx) & 0x02) !== 0;
+  }
+
+  function hidPadIndex(slot) {
+    // koppel het n-de HID-apparaat aan de n-de verbonden controller
+    var pads = nativeGetGamepads(), list = [];
+    for (var i = 0; i < pads.length; i++) if (pads[i] && pads[i].connected) list.push(pads[i].index);
+    return list.length ? list[Math.min(slot, list.length - 1)] : 0;
+  }
+
+  function hidAttach(dev) {
+    if (hidOpened.indexOf(dev) >= 0) return;
+    var slot = hidOpened.length;
+    hidOpened.push(dev);
+    var name = (dev.productName || 'HID') + ' ' + ('000' + dev.vendorId.toString(16)).slice(-4) + ':' + ('000' + dev.productId.toString(16)).slice(-4);
+    hidInfo[slot] = name + ' · openen…';
+    var wasDown = false, reports = 0;
+    var open = dev.opened ? Promise.resolve() : dev.open();
+    open.then(function () {
+      hidInfo[slot] = name + ' · open, wacht op gegevens';
+      dev.addEventListener('inputreport', function (e) {
+        reports++;
+        var down = hidTouchClick(e.reportId, e.data);
+        if (Date.now() < diagUntil) {
+          var bytes = [];
+          for (var b = 0; b < Math.min(e.data.byteLength, 10); b++) bytes.push(('0' + e.data.getUint8(b).toString(16)).slice(-2));
+          hidInfo[slot] = name + ' · rapport 0x' + e.reportId.toString(16) + ' (' + reports + ')\n    ' + bytes.join(' ') +
+            ' · touch-klik: ' + (down === null ? 'onbekend' : (down ? 'JA' : 'nee'));
+        }
+        if (down && !wasDown) {
+          var pi = hidPadIndex(slot);
+          pressNexus(pi);
+          toast('Xbox-knop via touchpad (controller ' + (pi + 1) + ')');
+        }
+        if (down !== null) wasDown = down;
+      });
+    }).catch(function (err) {
+      hidInfo[slot] = name + ' · openen mislukt: ' + (err && (err.name + ' ' + err.message) || err);
+    });
+  }
+
+  if (hidSupported) {
     hidStatus = 'ja (controleren…)';
     navigator.hid.getDevices().then(function (devs) {
-      hidStatus = 'ja, ' + devs.length + ' apparaat/apparaten met toestemming';
+      hidStatus = 'ja, ' + devs.length + ' met toestemming · OK op afstandsbediening = toestemming vragen';
+      devs.forEach(hidAttach);
     }).catch(function (e) {
       hidStatus = 'ja, maar geblokkeerd (' + (e && e.name || 'fout') + ')';
     });
+    if (navigator.hid.addEventListener) {
+      navigator.hid.addEventListener('connect', function (e) { hidAttach(e.device); });
+    }
+    window.addEventListener('keydown', function (e) {
+      if (Date.now() > diagUntil || (e.keyCode !== 13 && e.key !== 'Enter')) return;
+      hidStatus = 'toestemming gevraagd…';
+      try {
+        navigator.hid.requestDevice({ filters: [] }).then(function (devs) {
+          hidStatus = 'gekozen: ' + devs.length + ' apparaat/apparaten';
+          devs.forEach(hidAttach);
+        }).catch(function (err) {
+          hidStatus = 'toestemming mislukt: ' + (err && (err.name + ' ' + err.message) || err);
+        });
+      } catch (err) {
+        hidStatus = 'toestemming mislukt: ' + (err && err.message || err);
+      }
+    }, true);
   }
+
   function diagLog(txt) {
     if (Date.now() > diagUntil) return;
     var t = new Date();
@@ -534,8 +609,8 @@
     }
     var pads = nativeGetGamepads();
     var lines = ['DIAGNOSE (' + Math.ceil((diagUntil - Date.now()) / 1000) + ' s) · slots: ' + pads.length,
-      'WebHID: ' + hidStatus + ' · WebUSB: ' + ('usb' in navigator ? 'ja' : 'nee') +
-      ' · Bluetooth: ' + ('bluetooth' in navigator ? 'ja' : 'nee')];
+      'WebHID: ' + hidStatus];
+    for (var h = 0; h < hidInfo.length; h++) if (hidInfo[h]) lines.push('  HID ' + (h + 1) + ': ' + hidInfo[h]);
     for (var i = 0; i < pads.length; i++) {
       var p = pads[i];
       if (!p) { lines.push('#' + i + ': leeg'); continue; }
