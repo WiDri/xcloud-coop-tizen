@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         xCloud Co-op (Tizen)
 // @description  Alleen lokale co-op (meerdere controllers) voor xbox.com/play. Gebaseerd op de co-op-patch van Better xCloud (MIT, © redphx).
-// @version      2.3.0
+// @version      2.4.0
 // @match        https://www.xbox.com/*/play*
 // @run-at       document-start
 // @grant        none
@@ -13,7 +13,7 @@
   if (window.__xcCoop) return;
   window.__xcCoop = true;
 
-  var VERSION = '2.3.0';
+  var VERSION = '2.4.0';
 
   // ---------------------------------------------------------------------------
   // 0. Browser vermommen als Windows/Edge, zodat xCloud niet de route van de
@@ -422,6 +422,63 @@
     }
   }
   setInterval(autoContinue, 500);
+
+  // ---------------------------------------------------------------------------
+  // Bijwerken + herladen: houd LB + RB + View (PS: L1 + R1 + Share) 2 seconden vast.
+  // Haalt de nieuwste versie van GitHub op, zet die klaar voor de loader en herlaadt
+  // de pagina, zodat de nieuwe versie meteen draait.
+  // ---------------------------------------------------------------------------
+  var REPO = 'WiDri/xcloud-coop-tizen';
+  var CACHE_KEY = 'xcCoop.cachedScript';
+  var RELOAD_MS = 2000;
+  var reloadStart = 0, reloading = false;
+
+  function fetchText(url, headers) {
+    return fetch(url, { cache: 'no-store', headers: headers || {} }).then(function (r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.text();
+    });
+  }
+
+  function updateAndReload() {
+    if (reloading) return;
+    reloading = true;
+    toast('Nieuwste versie ophalen…');
+    fetchText('https://api.github.com/repos/' + REPO + '/commits/main', { Accept: 'application/vnd.github.sha' })
+      .then(function (sha) {
+        sha = sha.trim();
+        if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error('geen commit');
+        return fetchText('https://raw.githubusercontent.com/' + REPO + '/' + sha + '/dist/xcloud-coop.js');
+      })
+      .catch(function () {
+        return fetchText('https://raw.githubusercontent.com/' + REPO + '/main/dist/xcloud-coop.js?t=' + Date.now());
+      })
+      .then(function (code) {
+        var m = code.match(/var VERSION = '([^']+)'/);
+        try { window.localStorage.setItem(CACHE_KEY, code); } catch (e) {}
+        toast('Herladen met v' + (m ? m[1] : '?') + '…');
+      })
+      .catch(function (e) {
+        toast('Ophalen mislukt, gewoon herladen');
+      })
+      .then(function () {
+        setTimeout(function () { location.reload(); }, 800);
+      });
+  }
+
+  setInterval(function () {
+    if (reloading) return;
+    var pads = nativeGetGamepads();
+    var held = false;
+    for (var i = 0; i < pads.length; i++) {
+      var p = pads[i];
+      if (p && p.connected && p.buttons && p.buttons.length > 8 &&
+          p.buttons[4].pressed && p.buttons[5].pressed && p.buttons[8].pressed) { held = true; break; }
+    }
+    if (!held) { reloadStart = 0; return; }
+    if (!reloadStart) { reloadStart = Date.now(); toast('Blijf vasthouden om te herladen…'); return; }
+    if (Date.now() - reloadStart >= RELOAD_MS) updateAndReload();
+  }, 100);
 
   // ---------------------------------------------------------------------------
   // 4. Co-op aanzetten zodra de stream echt speelt
