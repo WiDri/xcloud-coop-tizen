@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         xCloud Co-op (Tizen)
 // @description  Alleen lokale co-op (meerdere controllers) voor xbox.com/play. Gebaseerd op de co-op-patch van Better xCloud (MIT, © redphx).
-// @version      2.12.0
+// @version      2.13.0
 // @match        https://www.xbox.com/*/play*
 // @run-at       document-start
 // @grant        none
@@ -13,7 +13,7 @@
   if (window.__xcCoop) return;
   window.__xcCoop = true;
 
-  var VERSION = '2.12.0';
+  var VERSION = '2.13.0';
 
   // ---------------------------------------------------------------------------
   // 0. Browser vermommen als Windows/Edge, zodat xCloud niet de route van de
@@ -302,13 +302,14 @@
       timestamp: p.timestamp, axes: axes, buttons: buttons };
   }
   var testerOpen = false;
+  var cursorOn = false;
   function patchedGetGamepads() {
     var pads = nativeGetGamepads();
     var now = Date.now();
     var out = [];
     for (var i = 0; i < pads.length; i++) {
       var p = pads[i];
-      if (p && p.connected && testerOpen) out.push(idlePad(p));       // xCloud ziet niets tijdens de test
+      if (p && p.connected && (testerOpen || cursorOn)) out.push(idlePad(p)); // xCloud ziet niets tijdens test/cursor
       else out.push(p && p.connected && forceNexusUntil[p.index] > now ? withNexus(p) : p);
     }
     return out;
@@ -325,7 +326,7 @@
     navigator.getGamepads = patchedGetGamepads;
     clearTimeout(restoreTimer);
     restoreTimer = setTimeout(function () {
-      if (!testerOpen) setGamepadOverride(false);
+      if (!testerOpen && !cursorOn) setGamepadOverride(false);
     }, NEXUS_MS + 100);
   }
 
@@ -766,8 +767,116 @@
     clearInterval(testerTimer);
     var el = document.getElementById('xc-coop-tester');
     if (el) el.remove();
-    setTimeout(function () { setGamepadOverride(false); }, 300); // even wachten tot ○ is losgelaten
+    setTimeout(function () { if (!testerOpen && !cursorOn) setGamepadOverride(false); }, 300); // even wachten tot ○ is losgelaten
   }
+
+  // ---------------------------------------------------------------------------
+  // Muiscursor met de controller
+  //  Aan/uit: houd beide sticks (L3 + R3) een halve seconde ingedrukt.
+  //  Linkerstick = bewegen, ✕ / A = klikken, rechterstick = scrollen, ○ / B = cursor uit.
+  //  Zolang de cursor aan staat, krijgt xCloud geen controllerinvoer.
+  // ---------------------------------------------------------------------------
+  var cur = { x: 0, y: 0, el: null, timer: null, aWas: false, comboStart: 0, comboFired: false };
+
+  function cursorEl() {
+    if (cur.el && document.documentElement.contains(cur.el)) return cur.el;
+    var el = document.createElement('div');
+    el.id = 'xc-coop-cursor';
+    el.innerHTML = '<svg width="28" height="28" viewBox="0 0 24 24"><path d="M3 2l7 19 2.5-7.5L20 11z" fill="#fff" stroke="#000" stroke-width="1.5" stroke-linejoin="round"/></svg>';
+    el.style.cssText = 'position:fixed;left:0;top:0;z-index:2147483647;pointer-events:none;' +
+      'filter:drop-shadow(0 1px 2px rgba(0,0,0,.7));will-change:transform';
+    document.documentElement.appendChild(el);
+    cur.el = el;
+    return el;
+  }
+
+  function fireMouse(target, type, extra) {
+    var opts = { bubbles: true, cancelable: true, composed: true, view: window, clientX: cur.x, clientY: cur.y,
+      screenX: cur.x, screenY: cur.y, button: 0, buttons: extra || 0 };
+    try {
+      if (type.indexOf('pointer') === 0 && window.PointerEvent) {
+        opts.pointerId = 1; opts.pointerType = 'mouse'; opts.isPrimary = true;
+        target.dispatchEvent(new PointerEvent(type, opts));
+      } else target.dispatchEvent(new MouseEvent(type, opts));
+    } catch (e) {}
+  }
+
+  function cursorClick() {
+    var t = document.elementFromPoint(cur.x, cur.y);
+    if (!t) return;
+    fireMouse(t, 'pointerover'); fireMouse(t, 'mouseover');
+    fireMouse(t, 'pointerdown', 1); fireMouse(t, 'mousedown', 1);
+    try { if (t.focus) t.focus({ preventScroll: true }); } catch (e) {}
+    fireMouse(t, 'pointerup'); fireMouse(t, 'mouseup');
+    fireMouse(t, 'click');
+  }
+
+  function scrollAt(dx, dy) {
+    var t = document.elementFromPoint(cur.x, cur.y);
+    while (t && t !== document.documentElement) {
+      var cs = getComputedStyle(t);
+      if ((dy && /(auto|scroll)/.test(cs.overflowY) && t.scrollHeight > t.clientHeight) ||
+          (dx && /(auto|scroll)/.test(cs.overflowX) && t.scrollWidth > t.clientWidth)) { t.scrollBy(dx, dy); return; }
+      t = t.parentElement;
+    }
+    window.scrollBy(dx, dy);
+  }
+
+  function cursorTick() {
+    var pads = nativeGetGamepads(), lx = 0, ly = 0, rx = 0, ry = 0, a = false, b = false;
+    for (var i = 0; i < pads.length; i++) {
+      var p = pads[i];
+      if (!p || !p.connected) continue;
+      var ax = p.axes;
+      if (Math.abs(ax[0]) > Math.abs(lx)) lx = ax[0];
+      if (Math.abs(ax[1]) > Math.abs(ly)) ly = ax[1];
+      if (Math.abs(ax[2] || 0) > Math.abs(rx)) rx = ax[2] || 0;
+      if (Math.abs(ax[3] || 0) > Math.abs(ry)) ry = ax[3] || 0;
+      if (p.buttons[0] && p.buttons[0].pressed) a = true;
+      if (p.buttons[1] && p.buttons[1].pressed) b = true;
+    }
+    var dz = function (v) { return Math.abs(v) < 0.15 ? 0 : (v - Math.sign(v) * 0.15) / 0.85; };
+    var sp = function (v) { v = dz(v); return Math.sign(v) * Math.pow(Math.abs(v), 1.6) * 22; };
+    cur.x = Math.max(0, Math.min(window.innerWidth - 2, cur.x + sp(lx)));
+    cur.y = Math.max(0, Math.min(window.innerHeight - 2, cur.y + sp(ly)));
+    cursorEl().style.transform = 'translate(' + Math.round(cur.x) + 'px,' + Math.round(cur.y) + 'px)';
+    var t = document.elementFromPoint(cur.x, cur.y);
+    if (t && t !== cur.hover) { if (cur.hover) fireMouse(cur.hover, 'mouseout'); fireMouse(t, 'mousemove'); fireMouse(t, 'mouseover'); cur.hover = t; }
+    if (dz(rx) || dz(ry)) scrollAt(Math.round(dz(rx) * 25), Math.round(dz(ry) * 25));
+    if (a && !cur.aWas) cursorClick();
+    cur.aWas = a;
+    if (b) setCursor(false);
+  }
+
+  function setCursor(on) {
+    if (on === cursorOn) return;
+    cursorOn = on;
+    if (on) {
+      if (!cur.x && !cur.y) { cur.x = window.innerWidth / 2; cur.y = window.innerHeight / 2; }
+      cur.aWas = true; // eerst ✕ loslaten
+      setGamepadOverride(true);
+      cursorEl().style.display = 'block';
+      cur.timer = setInterval(cursorTick, 16);
+      toast('Cursor aan · linkerstick = bewegen · ✕ = klikken · ○ = uit');
+    } else {
+      clearInterval(cur.timer);
+      if (cur.el) cur.el.style.display = 'none';
+      setTimeout(function () { if (!testerOpen && !cursorOn) setGamepadOverride(false); }, 300);
+      toast('Cursor uit');
+    }
+  }
+
+  // L3 + R3 een halve seconde vasthouden = cursor aan/uit
+  setInterval(function () {
+    var pads = nativeGetGamepads(), held = false;
+    for (var i = 0; i < pads.length; i++) {
+      var p = pads[i];
+      if (p && p.connected && p.buttons[10] && p.buttons[11] && p.buttons[10].pressed && p.buttons[11].pressed) held = true;
+    }
+    if (!held) { cur.comboStart = 0; cur.comboFired = false; return; }
+    if (!cur.comboStart) cur.comboStart = Date.now();
+    if (!cur.comboFired && Date.now() - cur.comboStart >= 500) { cur.comboFired = true; setCursor(!cursorOn); }
+  }, 50);
 
   // ---------------------------------------------------------------------------
   // Knoppen in de bovenbalk van xCloud (zoals Better xCloud dat doet)
