@@ -1,11 +1,11 @@
 {
   "name": "xcloud-coop-tizen",
-  "version": "1.9.0",
+  "version": "2.0.0",
   "appName": "xCloud Co-op",
   "description": "Xbox Cloud Gaming met lokale co-op (meerdere controllers) op Samsung Tizen-tv's",
   "packageType": "mods",
   "websiteURL": "https://www.xbox.com/nl-NL/play",
-  "main": "dist/xcloud-coop.js",
+  "main": "dist/loader.js",
   "evaluateScriptOnDocumentStart": false,
   "keys": [],
   "license": "MIT"
