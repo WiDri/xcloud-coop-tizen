@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         xCloud Co-op (Tizen)
 // @description  Alleen lokale co-op (meerdere controllers) voor xbox.com/play. Gebaseerd op de co-op-patch van Better xCloud (MIT, © redphx).
-// @version      3.3.0
+// @version      3.4.0
 // @match        https://www.xbox.com/*/play*
 // @run-at       document-start
 // @grant        none
@@ -13,7 +13,7 @@
   if (window.__xcCoop) return;
   window.__xcCoop = true;
 
-  var VERSION = '3.3.0';
+  var VERSION = '3.4.0';
   var TAG = '[xCloud co-op]';
   function log() { console.log.apply(console, [TAG].concat([].slice.call(arguments))); }
 
@@ -273,32 +273,72 @@
   var cursorOn = false;
   var menuOpen = false;
   function inputBlocked() { return testerOpen || cursorOn || menuOpen; }
+  // Options-knop: kort drukken = gewone Options (pauze in de game),
+  // 3 seconden vasthouden = Xbox-menu. Zolang Options ingedrukt is, houdt het script
+  // de knop even voor xCloud achter; bij loslaten binnen 3 s wordt hij alsnog als
+  // korte druk doorgegeven. Zo opent de game niet ook nog zijn eigen pauzemenu.
+  var OPT_HOLD_MS = 3000, OPT_REPLAY_MS = 150;
+  var opt = {};   // per controller: { down, fired, hint, replayUntil }
+
+  function withButtons(p, changes) {
+    var buttons = [];
+    for (var b = 0; b < p.buttons.length; b++) buttons.push(p.buttons[b]);
+    for (var k in changes) buttons[k] = btn(changes[k]);
+    return { id: p.id, index: p.index, connected: p.connected, mapping: p.mapping,
+      timestamp: performance.now(), axes: p.axes, buttons: buttons,
+      vibrationActuator: p.vibrationActuator, hapticActuators: p.hapticActuators };
+  }
+
   function patchedGetGamepads() {
     var pads = nativeGetGamepads();
     var now = Date.now();
     var out = [];
     for (var i = 0; i < pads.length; i++) {
       var p = pads[i];
-      if (p && p.connected && inputBlocked()) out.push(idlePad(p)); // xCloud ziet niets tijdens menu/test/cursor
-      else out.push(p && p.connected && forceNexusUntil[p.index] > now ? withNexus(p) : p);
+      if (!p || !p.connected) { out.push(p); continue; }
+      if (inputBlocked()) { out.push(idlePad(p)); continue; }          // menu/test/cursor
+      if (forceNexusUntil[p.index] > now) { out.push(withNexus(p)); continue; }
+      var o = opt[p.index];
+      if (o && o.replayUntil > now) { out.push(withButtons(p, { 9: true })); continue; }  // korte druk alsnog doorgeven
+      if (p.buttons && p.buttons[9] && p.buttons[9].pressed) { out.push(withButtons(p, { 9: false })); continue; } // achterhouden
+      out.push(p);
     }
     return out;
   }
-  function setGamepadOverride(on) {
-    try { delete navigator.getGamepads; } catch (e) {}
-    if (on) navigator.getGamepads = patchedGetGamepads;
-    else if (navigator.getGamepads === patchedGetGamepads) navigator.getGamepads = Navigator.prototype.getGamepads;
-  }
-  var restoreTimer = null;
-  function pressNexus(index) {
-    forceNexusUntil[index] = Date.now() + NEXUS_MS;
+  // De vervanging staat nu altijd aan (nodig voor de Options-knop)
+  function setGamepadOverride() {
+    if (navigator.getGamepads === patchedGetGamepads) return;
     try { delete navigator.getGamepads; } catch (e) {}
     navigator.getGamepads = patchedGetGamepads;
-    clearTimeout(restoreTimer);
-    restoreTimer = setTimeout(function () {
-      if (!inputBlocked()) setGamepadOverride(false);
-    }, NEXUS_MS + 100);
   }
+  setGamepadOverride();
+  function pressNexus(index) {
+    forceNexusUntil[index] = Date.now() + NEXUS_MS;
+    setGamepadOverride();
+  }
+
+  setInterval(function () {
+    var pads = nativeGetGamepads(), now = Date.now();
+    for (var i = 0; i < pads.length; i++) {
+      var p = pads[i];
+      if (!p || !p.connected || !p.buttons || !p.buttons[9]) continue;
+      var o = opt[p.index] || (opt[p.index] = { down: 0, fired: false, hint: false, replayUntil: 0 });
+      var pressed = p.buttons[9].pressed;
+      if (pressed && !inputBlocked()) {
+        if (!o.down) { o.down = now; o.fired = false; o.hint = false; }
+        var held = now - o.down;
+        if (held >= 1000 && !o.hint) { o.hint = true; toast('Blijf vasthouden voor het Xbox-menu…'); }
+        if (held >= OPT_HOLD_MS && !o.fired) {
+          o.fired = true;
+          pressNexus(p.index);
+          toast('Xbox-menu');
+        }
+      } else if (o.down) {
+        if (!o.fired && !inputBlocked()) o.replayUntil = now + OPT_REPLAY_MS;   // was een korte druk
+        o.down = 0;
+      }
+    }
+  }, 30);
 
   // ---------------------------------------------------------------------------
   // Scherm "Sluit je controller aan" automatisch wegklikken met "Toch doorgaan".
@@ -429,7 +469,7 @@
     testerOpen = true;
     testerUntil = Date.now() + 120000;
     testerCloseStart = 0;
-    setGamepadOverride(true);
+    setGamepadOverride();
     var el = document.createElement('div');
     el.id = 'xc-coop-tester';
     el.style.cssText = 'position:fixed;inset:5vh 5vw;z-index:2147483646;overflow:auto;background:rgba(10,10,10,.95);' +
@@ -445,7 +485,7 @@
     clearInterval(testerTimer);
     var el = document.getElementById('xc-coop-tester');
     if (el) el.remove();
-    setTimeout(function () { if (!inputBlocked()) setGamepadOverride(false); }, 300); // even wachten tot ○ is losgelaten
+    setTimeout(function () { /* vervanging blijft aan */ }, 300); // even wachten tot ○ is losgelaten
   }
 
   // ---------------------------------------------------------------------------
@@ -532,14 +572,14 @@
     if (on) {
       if (!cur.x && !cur.y) { cur.x = window.innerWidth / 2; cur.y = window.innerHeight / 2; }
       cur.aWas = true; // eerst ✕ loslaten
-      setGamepadOverride(true);
+      setGamepadOverride();
       cursorEl().style.display = 'block';
       cur.timer = setInterval(cursorTick, 16);
       toast('Cursor aan · linkerstick = bewegen · ✕ = klikken · ○ = uit');
     } else {
       clearInterval(cur.timer);
       if (cur.el) cur.el.style.display = 'none';
-      setTimeout(function () { if (!inputBlocked()) setGamepadOverride(false); }, 300);
+      setTimeout(function () { /* vervanging blijft aan */ }, 300);
       toast('Cursor uit');
     }
   }
@@ -635,7 +675,7 @@
     if (cursorOn) setCursor(false);
     menuOpen = true;
     menu.pad = padIndex; menu.sel = 0; menu.waitRelease = true; menu.prev = {}; menu.lastInput = Date.now();
-    setGamepadOverride(true);
+    setGamepadOverride();
     var el = document.createElement('div');
     el.id = 'xc-coop-menu';
     el.style.cssText = 'position:fixed;top:6vh;right:3vw;width:400px;max-height:88vh;overflow:auto;z-index:2147483646;' +
@@ -653,7 +693,7 @@
     clearInterval(menu.timer);
     if (menu.el) menu.el.remove();
     menu.el = null;
-    setTimeout(function () { if (!inputBlocked()) setGamepadOverride(false); }, 300);
+    setTimeout(function () { /* vervanging blijft aan */ }, 300);
   }
 
   // Share 3 seconden vasthouden (zonder Options) = co-op-menu openen.
