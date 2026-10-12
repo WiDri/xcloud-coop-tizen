@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         xCloud Co-op (Tizen)
 // @description  Alleen lokale co-op (meerdere controllers) voor xbox.com/play. Gebaseerd op de co-op-patch van Better xCloud (MIT, © redphx).
-// @version      2.10.0
+// @version      2.11.0
 // @match        https://www.xbox.com/*/play*
 // @run-at       document-start
 // @grant        none
@@ -13,7 +13,7 @@
   if (window.__xcCoop) return;
   window.__xcCoop = true;
 
-  var VERSION = '2.10.0';
+  var VERSION = '2.11.0';
 
   // ---------------------------------------------------------------------------
   // 0. Browser vermommen als Windows/Edge, zodat xCloud niet de route van de
@@ -705,6 +705,10 @@
       headerWrap.id = 'xc-coop-header';
       headerWrap.style.cssText = 'display:flex;align-items:center';
       headerWrap.appendChild(makeHeaderButton('↻ Herladen', 'Nieuwste co-op-versie ophalen en herladen', updateAndReload));
+      headerWrap.appendChild(makeHeaderButton('🎮 Controllertest', 'Open hardwaretester.com/gamepad', function () {
+        toast('Controllertest openen… (terug: terugknop of module opnieuw openen)');
+        setTimeout(function () { location.href = 'https://hardwaretester.com/gamepad'; }, 600);
+      }));
       if (hidSupported) headerWrap.appendChild(makeHeaderButton('Touchpad koppelen', 'Toestemming vragen voor de controller (WebHID) — druk op OK van de afstandsbediening', requestHid));
     }
     target.appendChild(headerWrap);
