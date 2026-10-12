@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         xCloud Co-op (Tizen)
 // @description  Alleen lokale co-op (meerdere controllers) voor xbox.com/play. Gebaseerd op de co-op-patch van Better xCloud (MIT, © redphx).
-// @version      2.0.0
+// @version      2.1.0
 // @match        https://www.xbox.com/*/play*
 // @run-at       document-start
 // @grant        none
@@ -13,7 +13,7 @@
   if (window.__xcCoop) return;
   window.__xcCoop = true;
 
-  var VERSION = '2.0.0';
+  var VERSION = '2.1.0';
   var TAG = '[xCloud co-op]';
   function log() { console.log.apply(console, [TAG].concat([].slice.call(arguments))); }
 
@@ -249,19 +249,29 @@
     };
   }
 
-  navigator.getGamepads = function () {
+  // De vervangende getGamepads wordt alleen tijdens de 0,2 s nep-Xbox-knop actief gezet,
+  // zodat xCloud de rest van de tijd de echte, ongewijzigde functie ziet.
+  function patchedGetGamepads() {
     var pads = nativeGetGamepads();
     var now = Date.now();
-    var active = false;
-    for (var k in forceNexusUntil) if (forceNexusUntil[k] > now) { active = true; break; }
-    if (!active) return pads;
     var out = [];
     for (var i = 0; i < pads.length; i++) {
       var p = pads[i];
       out.push(p && p.connected && forceNexusUntil[p.index] > now ? withNexus(p) : p);
     }
     return out;
-  };
+  }
+  var restoreTimer = null;
+  function pressNexus(index) {
+    forceNexusUntil[index] = Date.now() + NEXUS_MS;
+    try { delete navigator.getGamepads; } catch (e) {}
+    navigator.getGamepads = patchedGetGamepads;
+    clearTimeout(restoreTimer);
+    restoreTimer = setTimeout(function () {
+      try { delete navigator.getGamepads; } catch (e) {}
+      if (navigator.getGamepads === patchedGetGamepads) navigator.getGamepads = Navigator.prototype.getGamepads;
+    }, NEXUS_MS + 100);
+  }
 
   var HOLD_MS = 1000;
   var holdStart = {};
@@ -277,7 +287,7 @@
       if (!holdStart[p.index]) holdStart[p.index] = now;
       if (!holdFired[p.index] && now - holdStart[p.index] >= HOLD_MS) {
         holdFired[p.index] = true;
-        forceNexusUntil[p.index] = now + NEXUS_MS;
+        pressNexus(p.index);
         toast('Xbox-knop (controller ' + (p.index + 1) + ')');
       }
     }
@@ -377,7 +387,7 @@
     var el = document.createElement('div');
     el.id = 'xc-coop-version';
     el.textContent = 'co-op v' + VERSION;
-    el.style.cssText = 'position:fixed;left:8px;top:8px;z-index:2147483647;pointer-events:none;' +
+    el.style.cssText = 'position:fixed;left:48px;top:28px;z-index:2147483647;pointer-events:none;' +
       'background:rgba(0,0,0,.55);color:#fff;font:600 13px/1 system-ui,sans-serif;' +
       'padding:4px 7px;border-radius:5px;opacity:.75';
     document.documentElement.appendChild(el);
