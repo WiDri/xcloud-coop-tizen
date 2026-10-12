@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         xCloud Co-op (Tizen)
 // @description  Alleen lokale co-op (meerdere controllers) voor xbox.com/play. Gebaseerd op de co-op-patch van Better xCloud (MIT, © redphx).
-// @version      3.1.0
+// @version      3.2.0
 // @match        https://www.xbox.com/*/play*
 // @run-at       document-start
 // @grant        none
@@ -13,7 +13,7 @@
   if (window.__xcCoop) return;
   window.__xcCoop = true;
 
-  var VERSION = '3.1.0';
+  var VERSION = '3.2.0';
   var TAG = '[xCloud co-op]';
   function log() { console.log.apply(console, [TAG].concat([].slice.call(arguments))); }
 
@@ -348,14 +348,13 @@
   setInterval(autoContinue, 500);
 
   // ---------------------------------------------------------------------------
-  // Bijwerken + herladen: houd LB + RB + View (PS: L1 + R1 + Share) 2 seconden vast.
+  // Bijwerken + herladen (via het menu: "Nieuwe versie laden").
   // Haalt de nieuwste versie van GitHub op, zet die klaar voor de loader en herlaadt
   // de pagina, zodat de nieuwe versie meteen draait.
   // ---------------------------------------------------------------------------
   var REPO = 'WiDri/xcloud-coop-tizen';
   var CACHE_KEY = 'xcCoop.cachedScript';
-  var RELOAD_MS = 2000;
-  var reloadStart = 0, reloading = false;
+  var reloading = false;
 
   function fetchText(url, headers) {
     return fetch(url, { cache: 'no-store', headers: headers || {} }).then(function (r) {
@@ -390,19 +389,6 @@
       });
   }
 
-  setInterval(function () {
-    if (reloading) return;
-    var pads = nativeGetGamepads();
-    var held = false;
-    for (var i = 0; i < pads.length; i++) {
-      var p = pads[i];
-      if (p && p.connected && p.buttons && p.buttons.length > 8 &&
-          p.buttons[4].pressed && p.buttons[5].pressed && p.buttons[8].pressed) { held = true; break; }
-    }
-    if (!held) { reloadStart = 0; return; }
-    if (!reloadStart) { reloadStart = Date.now(); toast('Blijf vasthouden om te herladen…'); return; }
-    if (Date.now() - reloadStart >= RELOAD_MS) updateAndReload();
-  }, 100);
 
   // ---------------------------------------------------------------------------
   // Controllertest (eigen overlay). Toont per controller alle knoppen met PS- en
@@ -592,7 +578,7 @@
   }, 50);
 
   // ---------------------------------------------------------------------------
-  // Kindvriendelijk menu rechts: openen met L1 + R1 + Options (L1 + L2 + Options werkt ook).
+  // Kindvriendelijk menu rechts: openen door Options 3 seconden vast te houden.
   // "Xbox-menu" staat altijd als eerste geselecteerd. D-pad / linkerstick = kiezen,
   // ✕ / A = uitvoeren, ○ / B = sluiten. Gaat vanzelf dicht na 30 s niets doen.
   // Zolang het menu open is, krijgt xCloud geen controllerinvoer.
@@ -634,7 +620,8 @@
     }
     html.push('<div style="display:flex;gap:18px;align-items:center;margin-top:18px;font-size:17px;font-weight:600">' +
       '<span style="display:flex;align-items:center;gap:8px">' + KEY_X + ' kiezen</span>' +
-      '<span style="display:flex;align-items:center;gap:8px">' + KEY_O + ' terug</span></div>');
+      '<span style="display:flex;align-items:center;gap:8px">' + KEY_O + ' terug</span></div>' +
+      '<div style="font-size:12px;opacity:.45;margin-top:12px">co-op v' + VERSION + '</div>');
     menu.el.innerHTML = html.join('');
   }
 
@@ -646,7 +633,7 @@
     var B = function (n) { return !!(p.buttons[n] && p.buttons[n].pressed); };
     var up = B(12) || p.axes[1] < -0.6, down = B(13) || p.axes[1] > 0.6, a = B(0), b = B(1);
     if (menu.waitRelease) {               // eerst de openingscombinatie loslaten
-      if (!B(4) && !B(5) && !B(6) && !B(9) && !a) menu.waitRelease = false;
+      if (!B(9) && !a) menu.waitRelease = false;
       menu.prev = { up: up, down: down, a: a, b: b };
       return;
     }
@@ -690,21 +677,21 @@
     setTimeout(function () { if (!inputBlocked()) setGamepadOverride(false); }, 300);
   }
 
-  // L1 + R1 + Options (of L1 + L2 + Options) 0,4 s vasthouden = menu openen/sluiten
+  // Options 3 seconden vasthouden (zonder Share) = menu openen
+  var MENU_HOLD_MS = 3000;
   setInterval(function () {
     var pads = nativeGetGamepads(), who = -1;
     for (var i = 0; i < pads.length; i++) {
       var p = pads[i];
       if (!p || !p.connected || !p.buttons || p.buttons.length < 10) continue;
-      var B = function (n) { return !!(p.buttons[n] && p.buttons[n].pressed); };
-      if (B(4) && (B(5) || B(6)) && B(9)) { who = p.index; break; }
+      if (p.buttons[9].pressed && !p.buttons[8].pressed) { who = p.index; break; }
     }
-    if (who < 0) { menu.comboStart = 0; return; }
-    if (!menu.comboStart) menu.comboStart = Date.now();
-    else if (menu.comboStart > 0 && Date.now() - menu.comboStart >= 400) {
-      menu.comboStart = -1; // pas opnieuw na loslaten
-      if (menuOpen) closeMenu(); else openMenu(who);
-    }
+    if (who < 0 || menuOpen || testerOpen) { menu.comboStart = 0; menu.hintShown = false; return; }
+    if (!menu.comboStart) { menu.comboStart = Date.now(); return; }
+    if (menu.comboStart < 0) return; // pas opnieuw na loslaten
+    var held = Date.now() - menu.comboStart;
+    if (held >= 1000 && !menu.hintShown) { menu.hintShown = true; toast('Blijf vasthouden voor het menu…'); }
+    if (held >= MENU_HOLD_MS) { menu.comboStart = -1; openMenu(who); }
   }, 50);
 
   // ---------------------------------------------------------------------------
@@ -730,27 +717,6 @@
       }
     }, 500);
   }, true);
-
-  // ---------------------------------------------------------------------------
-  // Versielabel linksboven
-  // ---------------------------------------------------------------------------
-  function showVersionBadge() {
-    if (!document.documentElement || !document.body) { document.addEventListener('DOMContentLoaded', showVersionBadge); return; }
-    if (document.getElementById('xc-coop-version')) return;
-    var el = document.createElement('div');
-    el.id = 'xc-coop-version';
-    el.textContent = 'co-op v' + VERSION;
-    el.style.cssText = 'position:fixed;left:48px;top:28px;z-index:2147483647;pointer-events:none;' +
-      'background:rgba(0,0,0,.55);color:#fff;font:600 13px/1 system-ui,sans-serif;' +
-      'padding:4px 7px;border-radius:5px;opacity:.75';
-    document.documentElement.appendChild(el);
-  }
-  showVersionBadge();
-  // xCloud bouwt de pagina bij het opstarten opnieuw op en kan het label daarbij
-  // weghalen (vooral nu het script vroeg draait). Daarom elke seconde controleren.
-  setInterval(function () {
-    if (!document.getElementById('xc-coop-version')) showVersionBadge();
-  }, 1000);
 
   log('geladen v' + VERSION);
 })();
