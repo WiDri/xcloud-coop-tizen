@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         xCloud Co-op (Tizen)
 // @description  Alleen lokale co-op (meerdere controllers) voor xbox.com/play. Gebaseerd op de co-op-patch van Better xCloud (MIT, © redphx).
-// @version      2.11.0
+// @version      2.12.0
 // @match        https://www.xbox.com/*/play*
 // @run-at       document-start
 // @grant        none
@@ -13,7 +13,7 @@
   if (window.__xcCoop) return;
   window.__xcCoop = true;
 
-  var VERSION = '2.11.0';
+  var VERSION = '2.12.0';
 
   // ---------------------------------------------------------------------------
   // 0. Browser vermommen als Windows/Edge, zodat xCloud niet de route van de
@@ -294,15 +294,29 @@
 
   // De vervangende getGamepads wordt alleen tijdens de 0,2 s nep-Xbox-knop actief gezet,
   // zodat xCloud de rest van de tijd de echte, ongewijzigde functie ziet.
+  function idlePad(p) {
+    var buttons = [], axes = [];
+    for (var b = 0; b < p.buttons.length; b++) buttons.push(btn(false));
+    for (var a = 0; a < p.axes.length; a++) axes.push(0);
+    return { id: p.id, index: p.index, connected: p.connected, mapping: p.mapping,
+      timestamp: p.timestamp, axes: axes, buttons: buttons };
+  }
+  var testerOpen = false;
   function patchedGetGamepads() {
     var pads = nativeGetGamepads();
     var now = Date.now();
     var out = [];
     for (var i = 0; i < pads.length; i++) {
       var p = pads[i];
-      out.push(p && p.connected && forceNexusUntil[p.index] > now ? withNexus(p) : p);
+      if (p && p.connected && testerOpen) out.push(idlePad(p));       // xCloud ziet niets tijdens de test
+      else out.push(p && p.connected && forceNexusUntil[p.index] > now ? withNexus(p) : p);
     }
     return out;
+  }
+  function setGamepadOverride(on) {
+    try { delete navigator.getGamepads; } catch (e) {}
+    if (on) navigator.getGamepads = patchedGetGamepads;
+    else if (navigator.getGamepads === patchedGetGamepads) navigator.getGamepads = Navigator.prototype.getGamepads;
   }
   var restoreTimer = null;
   function pressNexus(index) {
@@ -311,8 +325,7 @@
     navigator.getGamepads = patchedGetGamepads;
     clearTimeout(restoreTimer);
     restoreTimer = setTimeout(function () {
-      try { delete navigator.getGamepads; } catch (e) {}
-      if (navigator.getGamepads === patchedGetGamepads) navigator.getGamepads = Navigator.prototype.getGamepads;
+      if (!testerOpen) setGamepadOverride(false);
     }, NEXUS_MS + 100);
   }
 
@@ -678,6 +691,85 @@
   }, 100);
 
   // ---------------------------------------------------------------------------
+  // Controllertest (eigen overlay). Toont per controller alle knoppen met PS- en
+  // Xbox-namen, sticks en triggers. xCloud krijgt zolang geen invoer.
+  // Sluiten: houd ○ / B 1 seconde vast (of wacht 2 minuten).
+  // ---------------------------------------------------------------------------
+  var BTN_NAMES = ['✕ / A', '○ / B', '□ / X', '△ / Y', 'L1 / LB', 'R1 / RB', 'L2 / LT', 'R2 / RT',
+    'Share / View', 'Options / Menu', 'L3', 'R3', '↑', '↓', '←', '→', 'PS / Xbox', 'Touchpad'];
+  var testerTimer = null, testerCloseStart = 0, testerUntil = 0;
+
+  function stickBox(x, y) {
+    var px = Math.round(50 + x * 40), py = Math.round(50 + y * 40);
+    return '<div style="position:relative;width:70px;height:70px;border-radius:50%;border:2px solid #555;display:inline-block;margin-right:10px">' +
+      '<div style="position:absolute;left:' + px + '%;top:' + py + '%;width:14px;height:14px;margin:-7px 0 0 -7px;border-radius:50%;background:#7CFC7C"></div></div>';
+  }
+
+  function renderTester() {
+    var el = document.getElementById('xc-coop-tester');
+    if (!el) return;
+    var pads = nativeGetGamepads(), html = [];
+    var any = false;
+    for (var i = 0; i < pads.length; i++) {
+      var p = pads[i];
+      if (!p || !p.connected) continue;
+      any = true;
+      var cells = [];
+      var n = Math.max(p.buttons.length, 18);
+      for (var b = 0; b < n; b++) {
+        var bt = p.buttons[b];
+        var exists = !!bt, v = exists ? bt.value : 0, on = exists && (bt.pressed || v > 0.05);
+        var bg = !exists ? '#222' : (on ? 'rgba(16,124,16,' + (0.35 + 0.65 * Math.max(v, bt.pressed ? 1 : 0)) + ')' : '#333');
+        cells.push('<div style="background:' + bg + ';border-radius:6px;padding:6px 4px;text-align:center;' +
+          (exists ? '' : 'opacity:.45;') + '">' + b + '<br><span style="font-size:12px">' + (BTN_NAMES[b] || '') +
+          (exists ? '' : '<br>niet doorgegeven') + '</span></div>');
+      }
+      var ax = p.axes;
+      html.push('<div style="margin-bottom:16px"><div style="font-weight:700">Controller ' + (p.index + 1) + ' · ' +
+        p.id.replace(/</g, '&lt;').slice(0, 60) + '</div><div style="font-size:13px;opacity:.75;margin-bottom:6px">' +
+        (p.mapping || 'geen mapping') + ' · ' + p.buttons.length + ' knoppen · ' + ax.length + ' assen</div>' +
+        '<div style="display:grid;grid-template-columns:repeat(9,1fr);gap:5px;margin-bottom:8px">' + cells.join('') + '</div>' +
+        '<div>' + stickBox(ax[0] || 0, ax[1] || 0) + stickBox(ax[2] || 0, ax[3] || 0) +
+        '<span style="font-size:13px;vertical-align:top">assen: ' + ax.map(function (v, k) { return k + ':' + v.toFixed(2); }).join('  ') + '</span></div></div>');
+    }
+    if (!any) html.push('<div>Geen controller gevonden. Druk op een knop van je controller.</div>');
+    var left = Math.ceil((testerUntil - Date.now()) / 1000);
+    html.push('<div style="opacity:.75;font-size:13px">Sluiten: houd ○ / B 1 seconde vast · sluit vanzelf over ' + left + ' s</div>');
+    el.innerHTML = '<div style="font-size:20px;font-weight:700;margin-bottom:10px">Controllertest</div>' + html.join('');
+
+    // sluiten met ○ / B
+    var holding = false;
+    for (var j = 0; j < pads.length; j++) if (pads[j] && pads[j].connected && pads[j].buttons[1] && pads[j].buttons[1].pressed) holding = true;
+    if (holding) { if (!testerCloseStart) testerCloseStart = Date.now(); else if (Date.now() - testerCloseStart > 1000) closeTester(); }
+    else testerCloseStart = 0;
+    if (Date.now() > testerUntil) closeTester();
+  }
+
+  function openTester() {
+    if (testerOpen) return;
+    testerOpen = true;
+    testerUntil = Date.now() + 120000;
+    testerCloseStart = 0;
+    setGamepadOverride(true);
+    var el = document.createElement('div');
+    el.id = 'xc-coop-tester';
+    el.style.cssText = 'position:fixed;inset:5vh 5vw;z-index:2147483646;overflow:auto;background:rgba(10,10,10,.95);' +
+      'color:#fff;font:15px/1.35 system-ui,sans-serif;padding:20px 24px;border-radius:14px;border:2px solid #444';
+    document.documentElement.appendChild(el);
+    renderTester();
+    testerTimer = setInterval(renderTester, 50);
+  }
+
+  function closeTester() {
+    if (!testerOpen) return;
+    testerOpen = false;
+    clearInterval(testerTimer);
+    var el = document.getElementById('xc-coop-tester');
+    if (el) el.remove();
+    setTimeout(function () { setGamepadOverride(false); }, 300); // even wachten tot ○ is losgelaten
+  }
+
+  // ---------------------------------------------------------------------------
   // Knoppen in de bovenbalk van xCloud (zoals Better xCloud dat doet)
   // ---------------------------------------------------------------------------
   function makeHeaderButton(label, title, onClick) {
@@ -705,10 +797,7 @@
       headerWrap.id = 'xc-coop-header';
       headerWrap.style.cssText = 'display:flex;align-items:center';
       headerWrap.appendChild(makeHeaderButton('↻ Herladen', 'Nieuwste co-op-versie ophalen en herladen', updateAndReload));
-      headerWrap.appendChild(makeHeaderButton('🎮 Controllertest', 'Open hardwaretester.com/gamepad', function () {
-        toast('Controllertest openen… (terug: terugknop of module opnieuw openen)');
-        setTimeout(function () { location.href = 'https://hardwaretester.com/gamepad'; }, 600);
-      }));
+      headerWrap.appendChild(makeHeaderButton('🎮 Controllertest', 'Laat zien wat de tv van je controllers doorgeeft', openTester));
       if (hidSupported) headerWrap.appendChild(makeHeaderButton('Touchpad koppelen', 'Toestemming vragen voor de controller (WebHID) — druk op OK van de afstandsbediening', requestHid));
     }
     target.appendChild(headerWrap);
