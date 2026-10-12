@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         xCloud Co-op (Tizen)
 // @description  Alleen lokale co-op (meerdere controllers) voor xbox.com/play. Gebaseerd op de co-op-patch van Better xCloud (MIT, © redphx).
-// @version      2.5.0
+// @version      2.6.0
 // @match        https://www.xbox.com/*/play*
 // @run-at       document-start
 // @grant        none
@@ -13,7 +13,7 @@
   if (window.__xcCoop) return;
   window.__xcCoop = true;
 
-  var VERSION = '2.5.0';
+  var VERSION = '2.6.0';
 
   // ---------------------------------------------------------------------------
   // 0. Browser vermommen als Windows/Edge, zodat xCloud niet de route van de
@@ -21,7 +21,7 @@
   //    Werkt alleen als dit script vroeg genoeg draait (via de cache van de loader).
   //    Zet UA_SPOOF op false om dit uit te schakelen.
   // ---------------------------------------------------------------------------
-  var UA_SPOOF = false;
+  var UA_SPOOF = true;
   var uaSpoofed = false;
   if (UA_SPOOF && /Tizen|SMART-TV/i.test(navigator.userAgent)) {
     try {
