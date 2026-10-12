@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         xCloud Co-op (Tizen)
 // @description  Alleen lokale co-op (meerdere controllers) voor xbox.com/play. Gebaseerd op de co-op-patch van Better xCloud (MIT, © redphx).
-// @version      2.4.0
+// @version      2.5.0
 // @match        https://www.xbox.com/*/play*
 // @run-at       document-start
 // @grant        none
@@ -13,7 +13,7 @@
   if (window.__xcCoop) return;
   window.__xcCoop = true;
 
-  var VERSION = '2.4.0';
+  var VERSION = '2.5.0';
 
   // ---------------------------------------------------------------------------
   // 0. Browser vermommen als Windows/Edge, zodat xCloud niet de route van de
@@ -478,6 +478,94 @@
     if (!held) { reloadStart = 0; return; }
     if (!reloadStart) { reloadStart = Date.now(); toast('Blijf vasthouden om te herladen…'); return; }
     if (Date.now() - reloadStart >= RELOAD_MS) updateAndReload();
+  }, 100);
+
+  // ---------------------------------------------------------------------------
+  // Uitgebreide diagnose (ook tijdens een game): houd L1 + R1 + Options 2 s vast.
+  // Toont 60 s lang alles wat de tv doorgeeft: alle controllers (ook "lege"),
+  // knoppen met waarde, ALLE assen, en muis-/aanraak-/toetsgebeurtenissen.
+  // Bedoeld om te zien of het touchpad ergens anders binnenkomt.
+  // ---------------------------------------------------------------------------
+  var diagUntil = 0, diagHoldStart = 0, diagEvents = [], diagBaseline = {};
+  function diagLog(txt) {
+    if (Date.now() > diagUntil) return;
+    var t = new Date();
+    diagEvents.push(('0' + t.getSeconds()).slice(-2) + '.' + ('00' + t.getMilliseconds()).slice(-3).slice(0, 1) + ' ' + txt);
+    if (diagEvents.length > 8) diagEvents.shift();
+  }
+  ['keydown', 'keyup', 'mousedown', 'mouseup', 'mousemove', 'click', 'wheel', 'pointerdown', 'pointermove',
+   'touchstart', 'touchmove', 'contextmenu', 'gamepadconnected', 'gamepaddisconnected'].forEach(function (type) {
+    var handler = function (e) {
+      if (Date.now() > diagUntil) return;
+      var info = type;
+      if (type.indexOf('key') === 0) info += ' code=' + e.keyCode + ' key=' + e.key;
+      else if (type.indexOf('gamepad') === 0) info += ' #' + (e.gamepad && e.gamepad.index) + ' ' + (e.gamepad && e.gamepad.id || '').slice(0, 30);
+      else if (e.clientX !== undefined) info += ' x=' + Math.round(e.clientX) + ' y=' + Math.round(e.clientY) + (e.button !== undefined ? ' btn=' + e.button : '') + (e.pointerType ? ' ' + e.pointerType : '');
+      else if (e.touches) info += ' touches=' + e.touches.length;
+      if ((type === 'mousemove' || type === 'pointermove' || type === 'touchmove') &&
+          diagEvents.length && diagEvents[diagEvents.length - 1].indexOf(type) > 0) diagEvents.pop();
+      diagLog(info);
+    };
+    window.addEventListener(type, handler, true);
+    document.addEventListener(type, handler, true);
+  });
+
+  function renderDiag() {
+    var el = document.getElementById('xc-coop-diag');
+    if (Date.now() > diagUntil) { if (el) el.style.display = 'none'; return; }
+    if (!document.body) return;
+    if (!el) {
+      el = document.createElement('pre');
+      el.id = 'xc-coop-diag';
+      el.style.cssText = 'position:fixed;right:48px;top:28px;z-index:2147483647;margin:0;width:46vw;max-height:85vh;overflow:hidden;' +
+        'background:rgba(0,0,0,.88);color:#7CFC7C;font:15px/1.35 monospace;padding:10px 12px;border-radius:8px;' +
+        'pointer-events:none;white-space:pre-wrap';
+      document.documentElement.appendChild(el);
+    }
+    var pads = nativeGetGamepads();
+    var lines = ['DIAGNOSE (' + Math.ceil((diagUntil - Date.now()) / 1000) + ' s) · slots: ' + pads.length];
+    for (var i = 0; i < pads.length; i++) {
+      var p = pads[i];
+      if (!p) { lines.push('#' + i + ': leeg'); continue; }
+      var pressed = [];
+      for (var b = 0; b < p.buttons.length; b++) {
+        var v = p.buttons[b].value;
+        if (p.buttons[b].pressed || v > 0.05) pressed.push(b + (v > 0 && v < 1 ? '(' + v.toFixed(2) + ')' : ''));
+      }
+      var base = diagBaseline[i] || (diagBaseline[i] = p.axes.slice());
+      var axes = [];
+      for (var a = 0; a < p.axes.length; a++) {
+        var val = p.axes[a];
+        var mark = Math.abs(val - (base[a] || 0)) > 0.15 ? '*' : '';
+        axes.push(a + ':' + val.toFixed(2) + mark);
+      }
+      lines.push('#' + p.index + ' ' + (p.connected ? '' : '(los) ') + p.id.slice(0, 42));
+      lines.push('  ' + (p.mapping || 'geen mapping') + ' · ' + p.buttons.length + ' knoppen · ' + p.axes.length + ' assen');
+      lines.push('  knoppen: ' + (pressed.join(' ') || '-'));
+      lines.push('  assen: ' + axes.join(' '));
+    }
+    lines.push('');
+    lines.push('gebeurtenissen:');
+    lines.push(diagEvents.length ? diagEvents.join('\n') : '-');
+    el.textContent = lines.join('\n');
+    el.style.display = 'block';
+  }
+
+  setInterval(function () {
+    var pads = nativeGetGamepads(), held = false;
+    for (var i = 0; i < pads.length; i++) {
+      var p = pads[i];
+      if (p && p.connected && p.buttons && p.buttons.length > 9 &&
+          p.buttons[4].pressed && p.buttons[5].pressed && p.buttons[9].pressed) { held = true; break; }
+    }
+    if (held) {
+      if (!diagHoldStart) diagHoldStart = Date.now();
+      else if (Date.now() - diagHoldStart >= 2000 && Date.now() > diagUntil) {
+        diagUntil = Date.now() + 60000; diagEvents = []; diagBaseline = {};
+        toast('Diagnose 60 s aan · druk nu op het touchpad');
+      }
+    } else diagHoldStart = 0;
+    renderDiag();
   }, 100);
 
   // ---------------------------------------------------------------------------
