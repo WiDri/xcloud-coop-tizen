@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         xCloud Co-op (Tizen)
 // @description  Alleen lokale co-op (meerdere controllers) voor xbox.com/play. Gebaseerd op de co-op-patch van Better xCloud (MIT, © redphx).
-// @version      2.2.0
+// @version      2.3.0
 // @match        https://www.xbox.com/*/play*
 // @run-at       document-start
 // @grant        none
@@ -13,7 +13,7 @@
   if (window.__xcCoop) return;
   window.__xcCoop = true;
 
-  var VERSION = '2.2.0';
+  var VERSION = '2.3.0';
 
   // ---------------------------------------------------------------------------
   // 0. Browser vermommen als Windows/Edge, zodat xCloud niet de route van de
@@ -21,7 +21,7 @@
   //    Werkt alleen als dit script vroeg genoeg draait (via de cache van de loader).
   //    Zet UA_SPOOF op false om dit uit te schakelen.
   // ---------------------------------------------------------------------------
-  var UA_SPOOF = true;
+  var UA_SPOOF = false;
   var uaSpoofed = false;
   if (UA_SPOOF && /Tizen|SMART-TV/i.test(navigator.userAgent)) {
     try {
@@ -398,6 +398,32 @@
   }, 100);
 
   // ---------------------------------------------------------------------------
+  // Scherm "Sluit je controller aan" automatisch wegklikken met "Toch doorgaan".
+  // xCloud herkent op Tizen de controller niet in deze controle, ook al werkt hij wel.
+  // ---------------------------------------------------------------------------
+  var CONTINUE_RE = /^\s*(toch doorgaan|continue anyway|trotzdem fortfahren|continuer quand m[eê]me)\s*$/i;
+  function autoContinue() {
+    if (!document.body) return;
+    var buttons = document.querySelectorAll('button');
+    for (var i = 0; i < buttons.length; i++) {
+      var b = buttons[i];
+      if (b.__xcClicked || !CONTINUE_RE.test(b.textContent || '')) continue;
+      // Alleen klikken als de knop in een klein blok (dialoog) staat waarin "controller" voorkomt
+      var el = b.parentElement, ok = false;
+      for (var up = 0; el && el !== document.body && up < 6; up++, el = el.parentElement) {
+        var txt = el.textContent || '';
+        if (txt.length > 1500) break;
+        if (/controller/i.test(txt)) { ok = true; break; }
+      }
+      if (!ok) continue;
+      b.__xcClicked = true;
+      log('controllerscherm automatisch overgeslagen');
+      setTimeout(function (btn) { return function () { btn.click(); }; }(b), 300);
+    }
+  }
+  setInterval(autoContinue, 500);
+
+  // ---------------------------------------------------------------------------
   // 4. Co-op aanzetten zodra de stream echt speelt
   // ---------------------------------------------------------------------------
   // Let op: tijdens het laden speelt xCloud soms al een video (trailer/wachtscherm)
@@ -436,6 +462,11 @@
     document.documentElement.appendChild(el);
   }
   showVersionBadge();
+  // xCloud bouwt de pagina bij het opstarten opnieuw op en kan het label daarbij
+  // weghalen (vooral nu het script vroeg draait). Daarom elke seconde controleren.
+  setInterval(function () {
+    if (!document.getElementById('xc-coop-version')) showVersionBadge();
+  }, 1000);
 
   log('geladen v' + VERSION);
 })();
