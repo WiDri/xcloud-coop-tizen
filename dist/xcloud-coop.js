@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         xCloud Co-op (Tizen)
 // @description  Alleen lokale co-op (meerdere controllers) voor xbox.com/play. Gebaseerd op de co-op-patch van Better xCloud (MIT, © redphx).
-// @version      3.0.0
+// @version      3.1.0
 // @match        https://www.xbox.com/*/play*
 // @run-at       document-start
 // @grant        none
@@ -13,36 +13,7 @@
   if (window.__xcCoop) return;
   window.__xcCoop = true;
 
-  var VERSION = '3.0.0';
-
-  // ---------------------------------------------------------------------------
-  // 0. Browser vermommen als Windows/Edge, zodat xCloud niet de route van de
-  //    officiële Samsung-app kiest (die controllers via Samsung zelf herkent).
-  //    Werkt alleen als dit script vroeg genoeg draait (via de cache van de loader).
-  //    Aan/uit te zetten via het co-op-menu (L1 + R1 + Options).
-  // ---------------------------------------------------------------------------
-  var UA_KEY = 'xcCoop.uaSpoof';
-  var UA_SPOOF = true;
-  try { UA_SPOOF = window.localStorage.getItem(UA_KEY) !== 'off'; } catch (e) {}
-  var uaSpoofed = false;
-  if (UA_SPOOF && /Tizen|SMART-TV/i.test(navigator.userAgent)) {
-    try {
-      var m = navigator.userAgent.match(/Chrome\/(\d+\.\d+\.\d+\.\d+)/) ||
-              navigator.userAgent.match(/(\d{2,3}\.\d+\.\d+\.\d+)\/[\d.]+ TV/);
-      var cv = m ? m[1] : '120.0.0.0';
-      var fakeUA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/' +
-        cv + ' Safari/537.36 Edg/' + cv;
-      var orgUA = navigator.userAgent;
-      Object.defineProperty(navigator, 'orgUserAgent', { get: function () { return orgUA; }, configurable: true });
-      Object.defineProperty(navigator, 'userAgent', { get: function () { return fakeUA; }, configurable: true });
-      Object.defineProperty(navigator, 'appVersion', { get: function () { return fakeUA.replace('Mozilla/', ''); }, configurable: true });
-      Object.defineProperty(navigator, 'platform', { get: function () { return 'Win32'; }, configurable: true });
-      if ('userAgentData' in navigator) {
-        Object.defineProperty(navigator, 'userAgentData', { get: function () { return undefined; }, configurable: true });
-      }
-      uaSpoofed = true;
-    } catch (e) { console.error('[xCloud co-op] UA-vermomming mislukt', e); }
-  }
+  var VERSION = '3.1.0';
   var TAG = '[xCloud co-op]';
   function log() { console.log.apply(console, [TAG].concat([].slice.call(arguments))); }
 
@@ -143,12 +114,8 @@
   var MARKER = 'this.gamepadMappingsToSend=[],';
   var INJECT = 'true;(' + installCoop.toString() + ').call(this);true,';
   var patched = false; // co-op-patch toegepast
-  var COMBINED = 'this.useCombinedAudioVideoStream=!!this.deviceInformation.isTizen';
   var PATCHES = [
-    { name: 'coop', find: MARKER, apply: function (src) { return src.replace(MARKER, MARKER + INJECT); } },
-    // Met een vermomde browser denkt xCloud dat het geen Tizen is; de tv heeft de
-    // gecombineerde audio/videostream wel nodig, dus die zetten we vast aan.
-    { name: 'combined', find: COMBINED, apply: function (src) { return src.replace(COMBINED, 'this.useCombinedAudioVideoStream=true'); } }
+    { name: 'coop', find: MARKER, apply: function (src) { return src.replace(MARKER, MARKER + INJECT); } }
   ];
   var donePatches = {};
 
@@ -161,7 +128,7 @@
 
   function patchModules(modules) {
     if (!modules) return;
-    var todo = PATCHES.filter(function (p) { return !donePatches[p.name] && (p.name !== 'combined' || uaSpoofed); });
+    var todo = PATCHES.filter(function (p) { return !donePatches[p.name]; });
     if (!todo.length) return;
     for (var id in modules) {
       var fn = modules[id];
@@ -625,42 +592,49 @@
   }, 50);
 
   // ---------------------------------------------------------------------------
-  // Co-op-menu rechts: openen met L1 + R1 + Options (L1 + L2 + Options werkt ook).
-  // D-pad / linkerstick = kiezen, ✕ / A = uitvoeren, ○ / B = sluiten.
+  // Kindvriendelijk menu rechts: openen met L1 + R1 + Options (L1 + L2 + Options werkt ook).
+  // "Xbox-menu" staat altijd als eerste geselecteerd. D-pad / linkerstick = kiezen,
+  // ✕ / A = uitvoeren, ○ / B = sluiten. Gaat vanzelf dicht na 30 s niets doen.
   // Zolang het menu open is, krijgt xCloud geen controllerinvoer.
   // ---------------------------------------------------------------------------
   var menu = { sel: 0, pad: 0, el: null, timer: null, prev: {}, repeatAt: 0, comboStart: 0, waitRelease: false };
 
+  // Kleuren van de PlayStation-knoppen, zodat kinderen ze herkennen
+  var KEY_X = '<span style="display:inline-block;width:30px;height:30px;line-height:30px;border-radius:50%;background:#2b6bd6;color:#fff;text-align:center;font-weight:800">✕</span>';
+  var KEY_O = '<span style="display:inline-block;width:30px;height:30px;line-height:30px;border-radius:50%;background:#d63b3b;color:#fff;text-align:center;font-weight:800">○</span>';
+
   function menuItems() {
     return [
-      { label: 'Xbox-menu openen', run: function (pi) { closeMenu(); setTimeout(function () { pressNexus(pi); }, 350); } },
-      { label: 'Muiscursor aan', run: function () { closeMenu(); setTimeout(function () { setCursor(true); }, 350); } },
-      { label: 'Controllertest', run: function () { closeMenu(); setTimeout(openTester, 350); } },
-      { label: 'Vermomming (Windows): ' + (UA_SPOOF ? 'aan' : 'uit'), run: function () {
-          try { window.localStorage.setItem(UA_KEY, UA_SPOOF ? 'off' : 'on'); } catch (e) {}
-          toast('Vermomming ' + (UA_SPOOF ? 'uit' : 'aan') + ' · herladen…');
-          closeMenu();
-          setTimeout(function () { location.reload(); }, 900);
-        } },
-      { label: 'Nieuwste versie laden', run: function () { closeMenu(); updateAndReload(); } },
-      { label: 'Sluiten', run: function () { closeMenu(); } }
+      { icon: '🎮', label: 'Xbox-menu', big: true, run: function (pi) { closeMenu(); setTimeout(function () { pressNexus(pi); }, 350); } },
+      { icon: '▶️', label: 'Verder spelen', big: true, run: function () { closeMenu(); } },
+      { icon: '🖱️', label: 'Muis', extra: true, run: function () { closeMenu(); setTimeout(function () { setCursor(true); }, 350); } },
+      { icon: '🔎', label: 'Controller testen', extra: true, run: function () { closeMenu(); setTimeout(openTester, 350); } },
+      { icon: '🔄', label: 'Nieuwe versie laden', extra: true, run: function () { closeMenu(); updateAndReload(); } }
     ];
   }
 
   function renderMenu() {
     if (!menu.el) return;
     var items = menuItems(), html = [];
-    html.push('<div style="font-size:20px;font-weight:700;margin-bottom:4px">xCloud Co-op</div>' +
-      '<div style="font-size:13px;opacity:.7;margin-bottom:14px">v' + VERSION + ' · ' + (uaSpoofed ? 'win' : 'tizen') +
-      ' · ' + connectedPads().length + ' controller(s)</div>');
+    var pads = connectedPads().length;
+    html.push('<div style="font-size:26px;font-weight:800;margin-bottom:2px">Menu</div>' +
+      '<div style="font-size:16px;opacity:.8;margin-bottom:16px">' + (pads === 1 ? '1 controller' : pads + ' controllers') + ' 🎮</div>');
+    var extraShown = false;
     for (var i = 0; i < items.length; i++) {
-      var on = i === menu.sel;
-      html.push('<div style="padding:12px 14px;margin:4px 0;border-radius:10px;font-weight:600;' +
-        (on ? 'background:#107c10;color:#fff;box-shadow:0 0 0 3px #fff inset' : 'background:rgba(255,255,255,.08);color:#ddd') +
-        '">' + items[i].label + '</div>');
+      var it = items[i], on = i === menu.sel;
+      if (it.extra && !extraShown) {
+        extraShown = true;
+        html.push('<div style="font-size:13px;opacity:.55;margin:16px 4px 6px;text-transform:uppercase;letter-spacing:.08em">Extra</div>');
+      }
+      var size = it.big ? 'font-size:24px;padding:18px 18px;border-radius:18px;' : 'font-size:16px;padding:10px 14px;border-radius:12px;';
+      var look = on ? 'background:#107c10;color:#fff;box-shadow:0 0 0 4px #fff inset;transform:scale(1.03);'
+                    : 'background:rgba(255,255,255,.10);color:#eee;';
+      html.push('<div style="' + size + look + 'margin:6px 0;font-weight:700;display:flex;align-items:center;gap:12px;transition:transform .1s">' +
+        '<span style="font-size:' + (it.big ? '30px' : '20px') + '">' + it.icon + '</span><span>' + it.label + '</span></div>');
     }
-    html.push('<div style="font-size:12px;opacity:.6;margin-top:14px;line-height:1.5">✕ kiezen · ○ sluiten<br>' +
-      'Sneltoetsen: Share+Options = Xbox-menu · L3+R3 = cursor · L1+R1+Share = herladen</div>');
+    html.push('<div style="display:flex;gap:18px;align-items:center;margin-top:18px;font-size:17px;font-weight:600">' +
+      '<span style="display:flex;align-items:center;gap:8px">' + KEY_X + ' kiezen</span>' +
+      '<span style="display:flex;align-items:center;gap:8px">' + KEY_O + ' terug</span></div>');
     menu.el.innerHTML = html.join('');
   }
 
@@ -677,6 +651,8 @@
       return;
     }
     var now = Date.now(), items = menuItems();
+    if (up || down || a || b) menu.lastInput = now;
+    else if (now - menu.lastInput > 30000) { closeMenu(); return; }   // vanzelf dicht na 30 s niets doen
     var dir = up ? -1 : (down ? 1 : 0);
     if (dir && (!(menu.prev.up || menu.prev.down) || now >= menu.repeatAt)) {
       menu.sel = (menu.sel + dir + items.length) % items.length;
@@ -692,13 +668,13 @@
     if (menuOpen || testerOpen) return;
     if (cursorOn) setCursor(false);
     menuOpen = true;
-    menu.pad = padIndex; menu.sel = 0; menu.waitRelease = true; menu.prev = {};
+    menu.pad = padIndex; menu.sel = 0; menu.waitRelease = true; menu.prev = {}; menu.lastInput = Date.now();
     setGamepadOverride(true);
     var el = document.createElement('div');
     el.id = 'xc-coop-menu';
-    el.style.cssText = 'position:fixed;top:6vh;right:3vw;width:340px;max-height:88vh;overflow:auto;z-index:2147483646;' +
-      'background:rgba(16,16,16,.96);color:#fff;font:16px/1.35 system-ui,sans-serif;padding:18px 18px 14px;' +
-      'border-radius:16px;border:2px solid #333;box-shadow:0 10px 40px rgba(0,0,0,.6)';
+    el.style.cssText = 'position:fixed;top:6vh;right:3vw;width:400px;max-height:88vh;overflow:auto;z-index:2147483646;' +
+      'background:linear-gradient(160deg,#1d1d2b,#101018);color:#fff;font:16px/1.35 system-ui,sans-serif;padding:22px 22px 18px;' +
+      'border-radius:24px;border:3px solid #107c10;box-shadow:0 10px 40px rgba(0,0,0,.6)';
     document.documentElement.appendChild(el);
     menu.el = el;
     renderMenu();
@@ -763,7 +739,7 @@
     if (document.getElementById('xc-coop-version')) return;
     var el = document.createElement('div');
     el.id = 'xc-coop-version';
-    el.textContent = 'co-op v' + VERSION + (uaSpoofed ? ' · win' : ' · tizen');
+    el.textContent = 'co-op v' + VERSION;
     el.style.cssText = 'position:fixed;left:48px;top:28px;z-index:2147483647;pointer-events:none;' +
       'background:rgba(0,0,0,.55);color:#fff;font:600 13px/1 system-ui,sans-serif;' +
       'padding:4px 7px;border-radius:5px;opacity:.75';
