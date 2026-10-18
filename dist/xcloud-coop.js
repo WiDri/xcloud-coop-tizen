@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         xCloud Co-op (Tizen)
 // @description  Alleen lokale co-op (meerdere controllers) voor xbox.com/play. Gebaseerd op de co-op-patch van Better xCloud (MIT, © redphx).
-// @version      3.4.1
+// @version      3.5.0
 // @match        https://www.xbox.com/*/play*
 // @run-at       document-start
 // @grant        none
@@ -13,7 +13,7 @@
   if (window.__xcCoop) return;
   window.__xcCoop = true;
 
-  var VERSION = '3.4.1';
+  var VERSION = '3.5.0';
   var TAG = '[xCloud co-op]';
   function log() { console.log.apply(console, [TAG].concat([].slice.call(arguments))); }
 
@@ -724,6 +724,57 @@
     if (held >= 1000 && !menu.hintShown) { menu.hintShown = true; toast('Blijf vasthouden voor het co-op-menu…'); }
     if (held >= MENU_HOLD_MS) { menu.comboStart = -1; openMenu(who); }
   }, 50);
+
+  // ---------------------------------------------------------------------------
+  // Controllernavigatie van xbox.com starten als xbox.com dat zelf niet doet.
+  // Soms blijft de GamepadNavigation-bibliotheek van xbox.com uit; de controller
+  // werkt dan wel in games, maar je kunt niet door de menu's bladeren.
+  // De module wordt op tekst gezocht (niet op nummer), want de nummers veranderen
+  // bij elke update van xbox.com.
+  // ---------------------------------------------------------------------------
+  var NAV_NEEDLE = 'Unable to initialize gamepad navigation in a non-browser environment';
+
+  function findWebpackRequire() {
+    var arr = window.__LOADABLE_LOADED_CHUNKS__;
+    if (!arr || !arr.push) return null;
+    var req = null;
+    try { arr.push([['__xcNav' + Date.now()], {}, function (r) { req = r; }]); } catch (e) {}
+    return req;
+  }
+
+  function findModule(req, needle) {
+    var mods = req && req.m;
+    if (!mods) return null;
+    for (var id in mods) {
+      try { if (mods[id].toString().indexOf(needle) >= 0) return req(id); } catch (e) {}
+    }
+    return null;
+  }
+
+  var navChecks = 0, navUiSeen = 0;
+  var navTimer = setInterval(function () {
+    if (++navChecks > 90) { clearInterval(navTimer); return; }           // na ±3 minuten stoppen
+    if (!document.querySelector('[class*="BaseItem-module"]')) return;  // menu van xbox.com nog niet in beeld
+    if (!navUiSeen) { navUiSeen = Date.now(); return; }                // xbox.com eerst zelf de kans geven
+    if (Date.now() - navUiSeen < 1500) return;
+    clearInterval(navTimer);
+    var nav = findModule(findWebpackRequire(), NAV_NEEDLE);
+    if (!nav || typeof nav.initializeGamepadNavigation !== 'function') {
+      console.warn(TAG, 'navigatiebibliotheek van xbox.com niet gevonden');
+      return;
+    }
+    if (nav.isLibraryInitialized()) { log('controllernavigatie al actief'); return; }
+    try {
+      nav.initializeGamepadNavigation({
+        overrideDefaultScrollBehavior: true,
+        defaultToFocusDrivenInputMode: true,
+        defaults: { bumperBehavior: 'scroll', triggerBehavior: 'scroll', activeInputMode: 'gamepad', pollingMode: 'all' }
+      });
+      log('controllernavigatie gestart');
+    } catch (err) {
+      console.error(TAG, 'controllernavigatie starten mislukt', err);
+    }
+  }, 1000);
 
   // ---------------------------------------------------------------------------
   // 4. Co-op aanzetten zodra de stream echt speelt
