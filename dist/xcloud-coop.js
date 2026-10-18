@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         xCloud Co-op (Tizen)
 // @description  Alleen lokale co-op (meerdere controllers) voor xbox.com/play. Gebaseerd op de co-op-patch van Better xCloud (MIT, © redphx).
-// @version      3.7.0
+// @version      3.7.1
 // @match        https://www.xbox.com/*/play*
 // @run-at       document-start
 // @grant        none
@@ -13,7 +13,7 @@
   if (window.__xcCoop) return;
   window.__xcCoop = true;
 
-  var VERSION = '3.7.0';
+  var VERSION = '3.7.1';
   var TAG = '[xCloud co-op]';
   function log() { console.log.apply(console, [TAG].concat([].slice.call(arguments))); }
 
@@ -608,6 +608,44 @@
   }, 50);
 
   // ---------------------------------------------------------------------------
+  // Statistieken linksonder: resolutie en fps van de stream (aan/uit via het menu).
+  // ---------------------------------------------------------------------------
+  var STATS_KEY = 'xcCoop.stats';
+  var statsOn = true;
+  try { statsOn = window.localStorage.getItem(STATS_KEY) !== '0'; } catch (e) {}
+  var stats = { el: null, frames: 0, at: 0 };
+
+  setInterval(function () {
+    var v = document.querySelector('video');
+    var playing = v && !v.paused && v.videoWidth > 0;
+    if (!statsOn || !playing) {
+      if (stats.el) stats.el.style.display = 'none';
+      stats.at = 0;
+      return;
+    }
+    var total = v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality().totalVideoFrames : 0;
+    var now = performance.now();
+    var fps = stats.at ? Math.round((total - stats.frames) * 1000 / (now - stats.at)) : null;
+    stats.frames = total;
+    stats.at = now;
+    if (!stats.el || !document.documentElement.contains(stats.el)) {
+      stats.el = document.createElement('div');
+      stats.el.id = 'xc-coop-stats';
+      stats.el.style.cssText = 'position:fixed;left:16px;bottom:12px;z-index:2147483645;pointer-events:none;' +
+        'background:rgba(0,0,0,.45);color:#fff;font:600 15px/1.3 system-ui,sans-serif;padding:4px 9px;border-radius:6px';
+      document.documentElement.appendChild(stats.el);
+    }
+    stats.el.style.display = 'block';
+    stats.el.textContent = v.videoHeight + 'p (' + v.videoWidth + '×' + v.videoHeight + ')' + (fps !== null ? ' · ' + fps + ' fps' : '');
+  }, 1000);
+
+  function toggleStats() {
+    statsOn = !statsOn;
+    try { window.localStorage.setItem(STATS_KEY, statsOn ? '1' : '0'); } catch (e) {}
+    toast('Statistieken ' + (statsOn ? 'aan' : 'uit'));
+  }
+
+  // ---------------------------------------------------------------------------
   // Kindvriendelijk menu rechts: openen door Share 3 seconden vast te houden.
   // "Xbox-menu" staat altijd als eerste geselecteerd. D-pad / linkerstick = kiezen,
   // ✕ / A = uitvoeren, ○ / B = sluiten. Gaat vanzelf dicht na 30 s niets doen.
@@ -623,6 +661,7 @@
     return [
       { icon: '🎮', label: 'Xbox-menu', big: true, run: function (pi) { closeMenu(); setTimeout(function () { pressNexus(pi); }, 350); } },
       { icon: '▶️', label: 'Verder spelen', big: true, run: function () { closeMenu(); } },
+      { icon: '📊', label: 'Statistieken: ' + (statsOn ? 'aan' : 'uit'), extra: true, run: function () { toggleStats(); renderMenu(); } },
       { icon: '🖱️', label: 'Muis', extra: true, run: function () { closeMenu(); setTimeout(function () { setCursor(true); }, 350); } },
       { icon: '🔎', label: 'Controller testen', extra: true, run: function () { closeMenu(); setTimeout(openTester, 350); } },
       { icon: '🔄', label: 'Nieuwe versie laden', extra: true, run: function () { closeMenu(); updateAndReload(); } }
