@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         xCloud Co-op (Tizen)
 // @description  Alleen lokale co-op (meerdere controllers) voor xbox.com/play. Gebaseerd op de co-op-patch van Better xCloud (MIT, © redphx).
-// @version      3.4.0
+// @version      3.4.1
 // @match        https://www.xbox.com/*/play*
 // @run-at       document-start
 // @grant        none
@@ -13,7 +13,7 @@
   if (window.__xcCoop) return;
   window.__xcCoop = true;
 
-  var VERSION = '3.4.0';
+  var VERSION = '3.4.1';
   var TAG = '[xCloud co-op]';
   function log() { console.log.apply(console, [TAG].concat([].slice.call(arguments))); }
 
@@ -418,6 +418,14 @@
     'Share / View', 'Options / Menu', 'L3', 'R3', '↑', '↓', '←', '→', 'PS / Xbox', 'Touchpad'];
   var testerTimer = null, testerCloseStart = 0, testerUntil = 0;
 
+  // Laatste toetsen die de tv aan de pagina geeft (bijv. als de tv de D-pad
+  // omzet in pijltjestoetsen van de afstandsbediening)
+  var lastKeys = [];
+  window.addEventListener('keydown', function (e) {
+    lastKeys.unshift(e.keyCode + (e.key ? ' ' + e.key : ''));
+    if (lastKeys.length > 8) lastKeys.length = 8;
+  }, true);
+
   function stickBox(x, y) {
     var px = Math.round(50 + x * 40), py = Math.round(50 + y * 40);
     return '<div style="position:relative;width:70px;height:70px;border-radius:50%;border:2px solid #555;display:inline-block;margin-right:10px">' +
@@ -452,6 +460,8 @@
         '<span style="font-size:13px;vertical-align:top">assen: ' + ax.map(function (v, k) { return k + ':' + v.toFixed(2); }).join('  ') + '</span></div></div>');
     }
     if (!any) html.push('<div>Geen controller gevonden. Druk op een knop van je controller.</div>');
+    html.push('<div style="margin-bottom:10px">Toetsen van tv/afstandsbediening: ' +
+      (lastKeys.length ? lastKeys.join(' · ').replace(/</g, '&lt;') : 'geen') + '</div>');
     var left = Math.ceil((testerUntil - Date.now()) / 1000);
     html.push('<div style="opacity:.75;font-size:13px">Sluiten: houd ○ / B 1 seconde vast · sluit vanzelf over ' + left + ' s</div>');
     el.innerHTML = '<div style="font-size:20px;font-weight:700;margin-bottom:10px">Controllertest</div>' + html.join('');
@@ -472,7 +482,8 @@
     setGamepadOverride();
     var el = document.createElement('div');
     el.id = 'xc-coop-tester';
-    el.style.cssText = 'position:fixed;inset:5vh 5vw;z-index:2147483646;overflow:auto;background:rgba(10,10,10,.95);' +
+    // geen `inset`: die kent de browser van Tizen 6.5 (Chromium 85) nog niet
+    el.style.cssText = 'position:fixed;top:5vh;bottom:5vh;left:5vw;right:5vw;z-index:2147483646;overflow:auto;background:rgba(10,10,10,.95);' +
       'color:#fff;font:15px/1.35 system-ui,sans-serif;padding:20px 24px;border-radius:14px;border:2px solid #444';
     document.documentElement.appendChild(el);
     renderTester();
