@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         xCloud Co-op (Tizen)
 // @description  Alleen lokale co-op (meerdere controllers) voor xbox.com/play. Gebaseerd op de co-op-patch van Better xCloud (MIT, © redphx).
-// @version      3.5.0
+// @version      3.6.0
 // @match        https://www.xbox.com/*/play*
 // @run-at       document-start
 // @grant        none
@@ -13,7 +13,7 @@
   if (window.__xcCoop) return;
   window.__xcCoop = true;
 
-  var VERSION = '3.5.0';
+  var VERSION = '3.6.0';
   var TAG = '[xCloud co-op]';
   function log() { console.log.apply(console, [TAG].concat([].slice.call(arguments))); }
 
@@ -608,6 +608,58 @@
   }, 50);
 
   // ---------------------------------------------------------------------------
+  // Scherper beeld (zoals Clarity Boost in Better xCloud): verscherpingsfilter
+  // (3x3-matrix) op de streamvideo. Kiezen via het co-op-menu; de tv onthoudt het.
+  // ---------------------------------------------------------------------------
+  var SHARP_KEY = 'xcCoop.sharpness';
+  var SHARP_LEVELS = [
+    { name: 'uit', amount: 0 },
+    { name: 'laag', amount: 0.25 },
+    { name: 'midden', amount: 0.5 },
+    { name: 'hoog', amount: 0.8 }
+  ];
+  var sharpLevel = 0;
+  try { sharpLevel = Math.max(0, Math.min(SHARP_LEVELS.length - 1, Number(window.localStorage.getItem(SHARP_KEY)) || 0)); } catch (e) {}
+
+  function updateSharpenFilter() {
+    var NS = 'http://www.w3.org/2000/svg';
+    if (!document.getElementById('xc-coop-filters')) {
+      var svg = document.createElementNS(NS, 'svg');
+      svg.id = 'xc-coop-filters';
+      svg.setAttribute('width', '0');
+      svg.setAttribute('height', '0');
+      svg.style.cssText = 'position:absolute;width:0;height:0';
+      svg.innerHTML = '<defs><filter id="xc-coop-sharpen" color-interpolation-filters="sRGB">' +
+        '<feConvolveMatrix id="xc-coop-sharpen-matrix" order="3" preserveAlpha="true"/></filter></defs>';
+      document.documentElement.appendChild(svg);
+    }
+    var s = SHARP_LEVELS[sharpLevel].amount;
+    document.getElementById('xc-coop-sharpen-matrix').setAttribute('kernelMatrix',
+      '0 ' + (-s) + ' 0 ' + (-s) + ' ' + (1 + 4 * s) + ' ' + (-s) + ' 0 ' + (-s) + ' 0');
+  }
+
+  function applySharpness() {
+    if (!document.documentElement) return;
+    var on = SHARP_LEVELS[sharpLevel].amount > 0;
+    if (on) updateSharpenFilter();
+    var videos = document.querySelectorAll('video');
+    for (var i = 0; i < videos.length; i++) {
+      if (videos[i].__xcSharp === sharpLevel) continue;
+      videos[i].__xcSharp = sharpLevel;
+      videos[i].style.filter = on ? 'url(#xc-coop-sharpen)' : '';
+    }
+  }
+  // Elke seconde, zodat ook de video die pas bij het starten van een game verschijnt het filter krijgt
+  setInterval(applySharpness, 1000);
+
+  function cycleSharpness() {
+    sharpLevel = (sharpLevel + 1) % SHARP_LEVELS.length;
+    try { window.localStorage.setItem(SHARP_KEY, String(sharpLevel)); } catch (e) {}
+    applySharpness();
+    toast('Scherper beeld: ' + SHARP_LEVELS[sharpLevel].name);
+  }
+
+  // ---------------------------------------------------------------------------
   // Kindvriendelijk menu rechts: openen door Share 3 seconden vast te houden.
   // "Xbox-menu" staat altijd als eerste geselecteerd. D-pad / linkerstick = kiezen,
   // ✕ / A = uitvoeren, ○ / B = sluiten. Gaat vanzelf dicht na 30 s niets doen.
@@ -623,6 +675,7 @@
     return [
       { icon: '🎮', label: 'Xbox-menu', big: true, run: function (pi) { closeMenu(); setTimeout(function () { pressNexus(pi); }, 350); } },
       { icon: '▶️', label: 'Verder spelen', big: true, run: function () { closeMenu(); } },
+      { icon: '✨', label: 'Scherper beeld: ' + SHARP_LEVELS[sharpLevel].name, extra: true, run: function () { cycleSharpness(); renderMenu(); } },
       { icon: '🖱️', label: 'Muis', extra: true, run: function () { closeMenu(); setTimeout(function () { setCursor(true); }, 350); } },
       { icon: '🔎', label: 'Controller testen', extra: true, run: function () { closeMenu(); setTimeout(openTester, 350); } },
       { icon: '🔄', label: 'Nieuwe versie laden', extra: true, run: function () { closeMenu(); updateAndReload(); } }
