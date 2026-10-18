@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         xCloud Co-op (Tizen)
 // @description  Alleen lokale co-op (meerdere controllers) voor xbox.com/play. Gebaseerd op de co-op-patch van Better xCloud (MIT, © redphx).
-// @version      3.7.1
+// @version      3.7.2
 // @match        https://www.xbox.com/*/play*
 // @run-at       document-start
 // @grant        none
@@ -13,7 +13,7 @@
   if (window.__xcCoop) return;
   window.__xcCoop = true;
 
-  var VERSION = '3.7.1';
+  var VERSION = '3.7.2';
   var TAG = '[xCloud co-op]';
   function log() { console.log.apply(console, [TAG].concat([].slice.call(arguments))); }
 
@@ -606,6 +606,33 @@
     if (!cur.comboStart) cur.comboStart = Date.now();
     if (!cur.comboFired && Date.now() - cur.comboStart >= 500) { cur.comboFired = true; setCursor(!cursorOn); }
   }, 50);
+
+  // ---------------------------------------------------------------------------
+  // Na het spelen de vraag "Hoe was je game-ervaring?" automatisch sluiten.
+  // Op een tv verbergt xbox.com daar de sluitknop; we roepen de eigen sluitfunctie
+  // (onExit) van het feedbackvenster aan via React. Alleen als er geen game meer
+  // speelt, zodat zelf feedback geven tijdens het spelen gewoon blijft werken.
+  // ---------------------------------------------------------------------------
+  function findReactProp(el, name) {
+    var key = null;
+    for (var k in el) { if (k.indexOf('__reactFiber$') === 0 || k.indexOf('__reactInternalInstance$') === 0) { key = k; break; } }
+    for (var f = key && el[key], up = 0; f && up < 25; f = f.return, up++) {
+      var p = f.memoizedProps;
+      if (p && typeof p[name] === 'function') return p[name];
+    }
+    return null;
+  }
+
+  setInterval(function () {
+    var box = document.querySelector('[class*="StreamFeedbackContainer-module__container"]');
+    if (!box || box.__xcClosed) return;
+    var v = document.querySelector('video');
+    if (v && !v.paused && v.videoWidth > 0) return;   // stream speelt nog: niet ingrijpen
+    var exit = findReactProp(box, 'onExit');
+    if (!exit) return;
+    box.__xcClosed = true;
+    try { exit(); log('ervaringsvraag na het spelen overgeslagen'); } catch (e) { console.error(TAG, 'ervaringsvraag sluiten mislukt', e); }
+  }, 700);
 
   // ---------------------------------------------------------------------------
   // Statistieken linksonder: resolutie en fps van de stream (aan/uit via het menu).
